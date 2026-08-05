@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { Copy, ExternalLink, File, Folder, FolderOpen, Trash2 } from '@lucide/vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { Copy, ExternalLink, File, Folder, FolderOpen, QrCode, Trash2, X } from '@lucide/vue';
+import { toDataURL } from 'qrcode';
 import { openPath, pushToast } from '../composables/useAppState';
 import { formatBytes, formatTimestamp } from '../utils/format';
 import type { ShareSession } from '../types';
@@ -22,6 +23,62 @@ const displayPath = computed(() =>
     .replace(/^\\\\\?\\UNC\\/, '\\\\')
     .replace(/^\\\\\?\\/, ''),
 );
+
+const qrOpen = ref(false);
+const qrUrl = ref(props.url);
+const qrDataUrl = ref('');
+const qrLoading = ref(false);
+const qrError = ref('');
+let qrKeydown: ((e: KeyboardEvent) => void) | null = null;
+
+async function openQrPreview() {
+  qrUrl.value = props.url;
+  qrOpen.value = true;
+  qrLoading.value = true;
+  qrError.value = '';
+  qrDataUrl.value = '';
+  try {
+    qrDataUrl.value = await toDataURL(props.url, {
+      width: 280,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+  } catch (err) {
+    qrError.value = '二维码生成失败：' + String(err);
+  } finally {
+    qrLoading.value = false;
+  }
+}
+
+function closeQrPreview() {
+  qrOpen.value = false;
+  qrDataUrl.value = '';
+  qrError.value = '';
+}
+
+watch(qrOpen, (open) => {
+  if (open) {
+    qrKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeQrPreview();
+    };
+    window.addEventListener('keydown', qrKeydown);
+  } else if (qrKeydown) {
+    window.removeEventListener('keydown', qrKeydown);
+    qrKeydown = null;
+  }
+});
+
+watch(() => props.url, () => {
+  if (qrOpen.value) void openQrPreview();
+});
+
+onBeforeUnmount(() => {
+  if (qrKeydown) {
+    window.removeEventListener('keydown', qrKeydown);
+    qrKeydown = null;
+  }
+});
 
 async function copyLink(url: string) {
   try {
@@ -76,6 +133,13 @@ async function showInFolder(path: string) {
       <div class="flex items-center gap-0.5 opacity-70 transition group-hover:opacity-100">
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
+          title="二维码"
+          @click.stop="openQrPreview"
+        >
+          <QrCode :size="14" />
+        </button>
+        <button
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
           title="复制链接"
           @click.stop="copyLink(url)"
         >
@@ -108,4 +172,48 @@ async function showInFolder(path: string) {
       <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="displayPath">{{ displayPath }}</span>
     </div>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="qrOpen"
+      class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="二维码"
+      @click.self="closeQrPreview"
+    >
+      <div class="anim-rise w-[340px] max-w-full overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-popup)]">
+        <div class="flex h-12 items-center justify-between border-b border-[var(--color-border-soft)] px-4">
+          <div class="flex items-center gap-2 text-[13px] font-semibold">
+            <QrCode :size="15" class="text-[var(--color-icon-accent)]" />
+            二维码
+          </div>
+          <button
+            class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+            title="关闭"
+            @click="closeQrPreview"
+          >
+            <X :size="15" />
+          </button>
+        </div>
+        <div class="p-4">
+          <div class="flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-white p-4">
+            <img v-if="qrDataUrl" :src="qrDataUrl" alt="分享二维码" class="h-56 w-56" />
+            <div v-else-if="qrLoading" class="flex h-56 w-56 items-center justify-center text-[12px] text-[var(--color-text-muted)]">生成中</div>
+            <div v-else-if="qrError" class="flex h-56 w-56 items-center justify-center px-4 text-center text-[12px] text-[var(--color-danger)]">{{ qrError }}</div>
+          </div>
+          <div class="mt-3 flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)] px-3 py-2">
+            <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="qrUrl">{{ qrUrl }}</span>
+            <button
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+              title="复制链接"
+              @click="copyLink(qrUrl)"
+            >
+              <Copy :size="12" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
