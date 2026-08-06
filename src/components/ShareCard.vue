@@ -10,6 +10,7 @@ const props = defineProps<{
   share: ShareSession;
   url: string;
   selected?: boolean;
+  removeLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -161,7 +162,7 @@ async function showInFolder(path: string) {
         </button>
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-danger)]"
-          title="停止分享"
+          :title="props.removeLabel || '停止分享'"
           @click.stop="emit('remove')"
         >
           <Trash2 :size="14" />

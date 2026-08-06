@@ -23,3 +23,5 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = ["Win32_Networking_WinSock"] }
+webview2-com = "0.38"
+windows-core = "0.61"

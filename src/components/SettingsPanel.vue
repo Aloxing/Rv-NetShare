@@ -1,12 +1,14 @@
 ﻿<script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Copy, FolderCog, HardDrive, Info, Laptop, Minus, Plus, RefreshCw, Type } from '@lucide/vue';
+import { computed, ref, watch } from 'vue';
+import { Copy, FolderCog, Globe, HardDrive, Info, Laptop, Minus, Plus, RadioTower, RefreshCw, Type } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   pushToast,
   refreshLocalIp,
   setFontSize,
   setSaveDir,
+  setSharePort,
+  setSitePort,
   useAppState,
 } from '../composables/useAppState';
 
@@ -14,6 +16,10 @@ const state = useAppState();
 const saveDirInput = ref<string>(state.initial?.save_dir ?? '');
 const submittingDir = ref(false);
 const refreshingIp = ref(false);
+const sharePortInput = ref<string>(String(state.initial?.share_port ?? 48721));
+const sitePortInput = ref<string>(String(state.initial?.site_port ?? 48800));
+const submittingSharePort = ref(false);
+const submittingSitePort = ref(false);
 
 const hostname = computed(() => state.initial?.hostname ?? '-');
 const localIp = computed(() => state.initial?.local_ip ?? '-');
@@ -22,6 +28,14 @@ const rootUrl = computed(() =>
   state.initial ? 'http://' + state.initial.local_ip + ':' + state.initial.port + '/' : '-',
 );
 const rootPath = computed(() => state.initial?.save_dir ?? '-');
+
+watch(() => state.initial, (initial) => {
+  if (initial) {
+    saveDirInput.value = initial.save_dir;
+    sharePortInput.value = String(initial.share_port ?? 48721);
+    sitePortInput.value = String(initial.site_port ?? 48800);
+  }
+}, { immediate: true });
 
 async function copy(text: string, label: string) {
   try {
@@ -54,6 +68,57 @@ async function pickFolder() {
   } catch (err) {
     pushToast('error', String(err));
   }
+}
+
+function parsePort(raw: string): number | null {
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
+}
+
+async function applySharePort() {
+  const p = parsePort(sharePortInput.value);
+  if (p === null) {
+    pushToast('error', '端口无效');
+    return;
+  }
+  submittingSharePort.value = true;
+  try {
+    const bound = await setSharePort(p);
+    sharePortInput.value = String(bound);
+    pushToast('success', '分享端口已更新');
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    submittingSharePort.value = false;
+  }
+}
+
+async function applySitePort() {
+  const p = parsePort(sitePortInput.value);
+  if (p === null) {
+    pushToast('error', '端口无效');
+    return;
+  }
+  submittingSitePort.value = true;
+  try {
+    const bound = await setSitePort(p);
+    sitePortInput.value = String(bound);
+    pushToast('success', '站点端口已更新');
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    submittingSitePort.value = false;
+  }
+}
+
+function resetSharePort() {
+  sharePortInput.value = '48721';
+  void applySharePort();
+}
+
+function resetSitePort() {
+  sitePortInput.value = '48800';
+  void applySitePort();
 }
 
 function bumpFont(delta: number) { setFontSize(state.fontSize + delta); }
@@ -148,6 +213,82 @@ async function onRefreshIp() {
             </div>
           </div>
 
+          <!-- 端口 -->
+          <div class="border-b border-[var(--color-border-soft)]">
+            <div class="flex h-10 items-center gap-2.5 px-4">
+              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-icon-accent-soft)] text-[var(--color-icon-accent)]">
+                <RadioTower :size="14" />
+              </div>
+              <span class="text-[12.5px] font-semibold">端口</span>
+            </div>
+            <div class="flex flex-col gap-3 p-3.5">
+              <div>
+                <div class="mb-1.5 flex items-center justify-between">
+                  <span class="flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--color-text-muted)]">
+                    <RadioTower :size="13" />
+                    分享端口
+                  </span>
+                  <button
+                    class="rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[10.5px] text-[var(--color-text-subtle)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+                    type="button"
+                    @click="resetSharePort"
+                  >
+                    默认
+                  </button>
+                </div>
+                <form class="flex gap-2" @submit.prevent="applySharePort">
+                  <input
+                    v-model="sharePortInput"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    class="h-9 min-w-0 flex-1 rounded-lg border border-[var(--color-input)] bg-[var(--color-bg)] px-3 font-mono text-[11.5px] text-[var(--color-text)] outline-none transition focus:border-[var(--color-ring)] focus:ring-2 focus:ring-[var(--color-ring)]/20"
+                    :disabled="submittingSharePort"
+                  />
+                  <button
+                    type="submit"
+                    class="inline-flex h-9 items-center rounded-lg bg-transparent px-3.5 text-[11.5px] font-medium text-[var(--color-accent)] transition hover:bg-transparent hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+                    :disabled="submittingSharePort"
+                  >
+                    应用
+                  </button>
+                </form>
+              </div>
+              <div>
+                <div class="mb-1.5 flex items-center justify-between">
+                  <span class="flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--color-text-muted)]">
+                    <Globe :size="13" />
+                    站点起始端口
+                  </span>
+                  <button
+                    class="rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1 text-[10.5px] text-[var(--color-text-subtle)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+                    type="button"
+                    @click="resetSitePort"
+                  >
+                    默认
+                  </button>
+                </div>
+                <form class="flex gap-2" @submit.prevent="applySitePort">
+                  <input
+                    v-model="sitePortInput"
+                    type="number"
+                    min="1"
+                    max="65535"
+                    class="h-9 min-w-0 flex-1 rounded-lg border border-[var(--color-input)] bg-[var(--color-bg)] px-3 font-mono text-[11.5px] text-[var(--color-text)] outline-none transition focus:border-[var(--color-ring)] focus:ring-2 focus:ring-[var(--color-ring)]/20"
+                    :disabled="submittingSitePort"
+                  />
+                  <button
+                    type="submit"
+                    class="inline-flex h-9 items-center rounded-lg bg-transparent px-3.5 text-[11.5px] font-medium text-[var(--color-accent)] transition hover:bg-transparent hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+                    :disabled="submittingSitePort"
+                  >
+                    应用
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+
           <!-- 界面字体 -->
           <div class="border-b border-[var(--color-border-soft)]">
             <div class="flex h-10 items-center gap-2.5 px-4">
@@ -185,7 +326,7 @@ async function onRefreshIp() {
               </div>
               <div class="flex items-center justify-between rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
                 <span class="text-[var(--color-text-muted)]">本地数据</span>
-                <span class="font-mono text-[var(--color-text)]">shares.json · history.json</span>
+                <span class="font-mono text-[var(--color-text)]">shares.json · sites.json · history.json</span>
               </div>
             </div>
           </div>

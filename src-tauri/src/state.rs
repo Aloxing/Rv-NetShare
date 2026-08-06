@@ -29,6 +29,19 @@ pub enum ShareKind {
     Folder,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteSession {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub total_bytes: u64,
+    pub created_at: i64,
+    /// Port the dedicated site server is bound to.
+    #[serde(default)]
+    pub port: u16,
+}
+
 pub struct AppState {
     /// Stable application data directory holding config.json and shares.json.
     pub base_dir: Mutex<PathBuf>,
@@ -39,6 +52,8 @@ pub struct AppState {
     pub port: Mutex<u16>,
     /// Active shares, keyed by their random token.
     pub shares: Mutex<HashMap<String, ShareSession>>,
+    /// Static website sessions, keyed by their random token.
+    pub sites: Mutex<HashMap<String, SiteSession>>,
 }
 
 impl AppState {
@@ -48,6 +63,7 @@ impl AppState {
             data_dir: Mutex::new(data_dir),
             port: Mutex::new(port),
             shares: Mutex::new(HashMap::new()),
+            sites: Mutex::new(HashMap::new()),
         }
     }
 }

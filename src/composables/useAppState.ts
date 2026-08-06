@@ -1,7 +1,7 @@
 import { reactive, readonly } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AccessRecord, InitialState, PathCheck, ShareSession } from '../types';
+import type { AccessRecord, InitialState, PathCheck, ShareSession, SiteSession } from '../types';
 
 // =============================================================================
 // Global drag-drop handler registry.
@@ -28,6 +28,7 @@ type ReactiveState = {
   ready: boolean;
   initial: InitialState | null;
   shares: ShareSession[];
+  sites: SiteSession[];
   history: AccessRecord[];
   toasts: Toast[];
   fontSize: number;
@@ -55,6 +56,7 @@ const state = reactive<ReactiveState>({
   ready: false,
   initial: null,
   shares: [],
+  sites: [],
   history: [],
   toasts: [],
   fontSize: loadFontSize(),
@@ -106,6 +108,7 @@ export async function initAppState() {
   mutate((s) => {
     s.initial = initial;
     s.shares = initial.shares;
+    s.sites = initial.sites;
     s.history = initial.history;
     s.ready = true;
   });
@@ -175,6 +178,32 @@ export async function clearShares() {
   pushToast('info', '已停止全部分享');
 }
 
+export async function refreshSites() {
+  const list = await invoke<SiteSession[]>('list_sites');
+  mutate((s) => { s.sites = list; });
+}
+
+export async function createSite(path: string) {
+  const session = await invoke<SiteSession>('create_site', { path });
+  mutate((s) => {
+    if (!s.sites.some((x) => x.id === session.id)) {
+      s.sites = [session, ...s.sites];
+    }
+  });
+  return session;
+}
+
+export async function removeSite(id: string) {
+  await invoke<void>('remove_site', { id });
+  mutate((s) => { s.sites = s.sites.filter((x) => x.id !== id); });
+}
+
+export async function clearSites() {
+  await invoke<void>('clear_sites');
+  mutate((s) => { s.sites = []; });
+  pushToast('info', '已移除全部站点');
+}
+
 export async function openPath(path: string) {
   return invoke<void>('open_path', { path });
 }
@@ -203,6 +232,27 @@ export async function setSaveDir(path: string): Promise<string> {
   return resolved;
 }
 
+export async function setSharePort(port: number): Promise<number> {
+  const bound = await invoke<number>('set_share_port', { port });
+  mutate((s) => {
+    if (s.initial) {
+      s.initial = { ...s.initial, port: bound, share_port: port };
+    }
+  });
+  return bound;
+}
+
+export async function setSitePort(port: number): Promise<number> {
+  const bound = await invoke<number>('set_site_port', { port });
+  await refreshSites();
+  mutate((s) => {
+    if (s.initial) {
+      s.initial = { ...s.initial, site_port: port };
+    }
+  });
+  return bound;
+}
+
 export function setFontSize(n: number) {
   const clamped = Math.min(18, Math.max(11, Math.round(n)));
   mutate((s) => { s.fontSize = clamped; });
@@ -220,6 +270,11 @@ export function pushToast(kind: ToastKind, text: string) {
 export function buildShareUrl(localIp: string, port: number, id: string, suffix = '') {
   const base = 'http://' + localIp + ':' + port + '/s/' + id;
   return suffix ? base + '/' + suffix : base;
+}
+
+export function buildSiteUrl(localIp: string, port: number, suffix = '') {
+  const base = 'http://' + localIp + ':' + port + '/';
+  return suffix ? base + suffix : base;
 }
 
 // ============================================================================

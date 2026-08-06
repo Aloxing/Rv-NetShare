@@ -5,6 +5,7 @@ import AppNavBar from './components/AppNavBar.vue';
 import AppTitleBar from './components/AppTitleBar.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
 import SharesPanel from './components/SharesPanel.vue';
+import SitesPanel from './components/SitesPanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ToastStack from './components/ToastStack.vue';
@@ -34,6 +35,7 @@ onBeforeUnmount(() => {
 });
 
 const shareCount = computed(() => state.shares.length);
+const siteCount = computed(() => state.sites.length);
 const historyCount = computed(() => state.history.length);
 </script>
 
@@ -45,6 +47,7 @@ const historyCount = computed(() => state.history.length);
     <main class="flex flex-1 flex-col overflow-hidden">
       <div class="flex-1 overflow-hidden">
         <SharesPanel v-if="activeTab === 'shares'" />
+        <SitesPanel v-else-if="activeTab === 'sites'" />
         <HistoryPanel v-else-if="activeTab === 'history'" />
         <SettingsPanel v-else-if="activeTab === 'settings'" />
       </div>
@@ -62,7 +65,7 @@ const historyCount = computed(() => state.history.length);
       </div>
     </div>
 
-    <AppStatusBar :shares="shareCount" :history="historyCount" />
+    <AppStatusBar :shares="shareCount" :sites="siteCount" :history="historyCount" />
     <ToastStack />
   </div>
 </template>

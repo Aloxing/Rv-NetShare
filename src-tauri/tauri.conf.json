@@ -23,7 +23,12 @@
         "shadow": true,
         "resizable": true,
         "fullscreen": false,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AutofillServerCommunication,WinUseBrowserSpellChecker,msWebView2EnableTrackingPrevention,msWebView2EnableShoppingFeatures,msWebView2EnableFamilySafety --disable-extensions --disable-background-networking --disable-component-update --disable-sync --disable-breakpad --no-first-run --disable-gpu",
+        "browserExtensionsEnabled": false,
+        "generalAutofillEnabled": false,
+        "zoomHotkeysEnabled": false,
+        "devtools": false
       }
     ],
     "security": {

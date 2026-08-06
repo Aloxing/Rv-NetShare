@@ -4,6 +4,7 @@
 //!
 //! Stable app dir (dirs::data_local_dir()/rv-netshare/):
 //!   * shares.json - active share sessions, restored on launch
+//!   * sites.json - static website sessions, restored on launch
 //!
 //! Configurable save dir (defaults to the same folder):
 //!   * history.json - array of ShareAccess records (one per download)
@@ -16,7 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::state::ShareSession;
+use crate::state::{ShareSession, SiteSession};
 
 /// Serializes read-modify-write cycles so concurrent downloads cannot
 /// corrupt history.json.
@@ -92,6 +93,25 @@ pub fn read_shares(dir: &Path) -> io::Result<Vec<ShareSession>> {
 pub fn write_shares(dir: &Path, shares: &[ShareSession]) -> io::Result<()> {
     let path = dir.join("shares.json");
     let raw = serde_json::to_string_pretty(shares)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(path, raw)
+}
+
+pub fn read_sites(dir: &Path) -> io::Result<Vec<SiteSession>> {
+    let path = dir.join("sites.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&path)?;
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+pub fn write_sites(dir: &Path, sites: &[SiteSession]) -> io::Result<()> {
+    let path = dir.join("sites.json");
+    let raw = serde_json::to_string_pretty(sites)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(path, raw)
 }

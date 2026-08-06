@@ -13,6 +13,10 @@ export interface ShareSession {
   created_at: number;
 }
 
+export interface SiteSession extends ShareSession {
+  port: number;
+}
+
 export interface AccessRecord {
   id: string;
   share_id: string;
@@ -31,10 +35,13 @@ export interface InitialState {
   port: number;
   save_dir: string;
   shares: ShareSession[];
+  sites: SiteSession[];
+  share_port: number | null;
+  site_port: number | null;
   history: AccessRecord[];
 }
 
-export type Tab = 'shares' | 'history' | 'settings';
+export type Tab = 'shares' | 'sites' | 'history' | 'settings';
 
 // Result of Tauri's drag-drop event when enabled. On Linux/Windows the
 // dropped File objects expose a path property pointing at the real path.

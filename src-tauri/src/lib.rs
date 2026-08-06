@@ -17,6 +17,7 @@ pub mod server;
 pub mod state;
 mod storage;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -24,15 +25,18 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
 use crate::net::{get_hostname, get_local_ip};
-use crate::server::{start_server, stop_server, ServerStatus};
-use crate::state::{AppState, ShareKind, ShareSession};
+use crate::server::{start_server, start_site_server, stop_server, ServerStatus};
+use crate::state::{AppState, ShareKind, ShareSession, SiteSession};
 use crate::storage::{
-    ensure_data_dir, read_history, read_shares, reveal_in_explorer, write_history, write_shares,
-    AccessRecord,
+    ensure_data_dir, read_history, read_shares, read_sites, reveal_in_explorer, write_history,
+    write_shares, write_sites, AccessRecord,
 };
 
 #[derive(Default)]
 struct ServerHandle(Mutex<Option<ServerStatus>>);
+
+#[derive(Default)]
+struct SiteServerHandle(Mutex<HashMap<String, ServerStatus>>);
 
 #[derive(Serialize)]
 struct InitialState {
@@ -41,16 +45,22 @@ struct InitialState {
     port: u16,
     save_dir: String,
     shares: Vec<ShareSession>,
+    sites: Vec<SiteSession>,
+    share_port: Option<u16>,
+    site_port: Option<u16>,
     history: Vec<AccessRecord>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct AppConfig {
     save_dir: Option<String>,
+    share_port: Option<u16>,
+    site_port: Option<u16>,
 }
 
 const DEFAULT_PORT: u16 = 48721;
-const PORT_FALLBACK_RANGE: std::ops::RangeInclusive<u16> = 48721..=48799;
+const DEFAULT_SITE_PORT: u16 = 48800;
+const PORT_FALLBACK_LIMIT: u16 = 100;
 
 fn default_app_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -112,6 +122,16 @@ fn write_config(state: &AppState, cfg: &AppConfig) {
     }
 }
 
+fn configured_share_port(state: &AppState) -> u16 {
+    let port = read_config(state).share_port.unwrap_or(DEFAULT_PORT);
+    if port == 0 { DEFAULT_PORT } else { port }
+}
+
+fn configured_site_port(state: &AppState) -> u16 {
+    let port = read_config(state).site_port.unwrap_or(DEFAULT_SITE_PORT);
+    if port == 0 { DEFAULT_SITE_PORT } else { port }
+}
+
 fn load_shares(state: &AppState) -> Vec<ShareSession> {
     let dir = state.base_dir.lock().unwrap().clone();
     read_shares(&dir).unwrap_or_default()
@@ -122,6 +142,19 @@ fn persist_shares(state: &AppState) {
     let shares: Vec<ShareSession> = state.shares.lock().unwrap().values().cloned().collect();
     if let Err(e) = write_shares(&dir, &shares) {
         eprintln!("[share] failed to persist shares: {e}");
+    }
+}
+
+fn load_sites(state: &AppState) -> Vec<SiteSession> {
+    let dir = state.base_dir.lock().unwrap().clone();
+    read_sites(&dir).unwrap_or_default()
+}
+
+fn persist_sites(state: &AppState) {
+    let dir = state.base_dir.lock().unwrap().clone();
+    let sites: Vec<SiteSession> = state.sites.lock().unwrap().values().cloned().collect();
+    if let Err(e) = write_sites(&dir, &sites) {
+        eprintln!("[site] failed to persist sites: {e}");
     }
 }
 
@@ -173,13 +206,18 @@ fn app_initial_state(state: State<'_, AppState>) -> Result<InitialState, String>
     let hostname = get_hostname();
     let save_dir = ensure_data_dir(&state).map_err(|e| e.to_string())?;
     let shares = state.shares.lock().unwrap().values().cloned().collect();
+    let sites = state.sites.lock().unwrap().values().cloned().collect();
     let history = read_history(&save_dir).unwrap_or_default();
+    let cfg = read_config(&state);
     Ok(InitialState {
         local_ip,
         hostname,
         port: *state.port.lock().unwrap(),
         save_dir: save_dir.to_string_lossy().into_owned(),
         shares,
+        sites,
+        share_port: cfg.share_port,
+        site_port: cfg.site_port,
         history,
     })
 }
@@ -195,19 +233,27 @@ fn start_receiver_server(
             return Ok(s.port);
         }
     }
-    let status = try_bind(&app).map_err(|e| e.to_string())?;
+    let base = configured_share_port(&app.state::<AppState>());
+    let status = try_bind(&app, base).map_err(|e| e.to_string())?;
     let bound_port = status.port;
     *handle.0.lock().unwrap() = Some(status);
     Ok(bound_port)
 }
 
-fn try_bind(app: &tauri::AppHandle) -> Result<ServerStatus, String> {
+fn try_bind(app: &tauri::AppHandle, base: u16) -> Result<ServerStatus, String> {
     let mut last_err: Option<String> = None;
-    for port in PORT_FALLBACK_RANGE {
+    if base != DEFAULT_PORT {
+        match start_server(app.clone(), base) {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let end = DEFAULT_PORT.saturating_add(PORT_FALLBACK_LIMIT);
+    for port in DEFAULT_PORT..=end {
         match start_server(app.clone(), port) {
             Ok(s) => {
-                if port != DEFAULT_PORT {
-                    eprintln!("[share] default port {DEFAULT_PORT} busy, fell back to {port}");
+                if port != base {
+                    eprintln!("[share] configured port {base} busy, fell back to {port}");
                 }
                 return Ok(s);
             }
@@ -282,6 +328,229 @@ fn clear_shares(state: State<'_, AppState>) -> Result<(), String> {
     state.shares.lock().unwrap().clear();
     persist_shares(&state);
     Ok(())
+}
+
+#[tauri::command]
+fn list_sites(state: State<'_, AppState>) -> Vec<SiteSession> {
+    state.sites.lock().unwrap().values().cloned().collect()
+}
+
+#[tauri::command]
+fn start_site_with_fallback(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    site: &mut SiteSession,
+) -> Result<ServerStatus, String> {
+    if site.port != 0 {
+        if let Ok(status) = start_site_server(app.clone(), site.clone(), site.port) {
+            site.port = status.port;
+            return Ok(status);
+        }
+    }
+    let base = configured_site_port(state);
+    let used: HashSet<u16> = state
+        .sites
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|s| s.id != site.id)
+        .map(|s| s.port)
+        .filter(|p| *p != 0)
+        .collect();
+    let mut candidate = base;
+    while used.contains(&candidate) && candidate < u16::MAX {
+        candidate += 1;
+    }
+    match start_site_server(app.clone(), site.clone(), candidate) {
+        Ok(status) => {
+            site.port = status.port;
+            Ok(status)
+        }
+        Err(_) => Err(format!("端口 {candidate} 被占用，无法使用")),
+    }
+}
+
+#[tauri::command]
+fn create_site(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    handles: State<'_, SiteServerHandle>,
+    path: String,
+) -> Result<SiteSession, String> {
+    let path = PathBuf::from(path.trim());
+    if !path.exists() {
+        return Err(format!("路径不存在: {}", path.display()));
+    }
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !meta.is_dir() {
+        return Err("必须是文件夹".to_string());
+    }
+    let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    if !canonical.join("index.html").is_file() && !canonical.join("index.htm").is_file() {
+        return Err("文件夹中未找到 index.html".to_string());
+    }
+
+    let existing = {
+        let sites = state.sites.lock().unwrap();
+        sites
+            .values()
+            .find(|s| {
+                let p = PathBuf::from(&s.path);
+                std::fs::canonicalize(&p).ok() == Some(canonical.clone())
+            })
+            .cloned()
+    };
+    if let Some(s) = existing {
+        return Ok(s);
+    }
+
+    let (size, total_bytes) = share_path_stats(&canonical).map_err(|e| e.to_string())?;
+    let name = canonical
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("site")
+        .to_string();
+    let mut session = SiteSession {
+        id: random_id(),
+        name,
+        path: strip_extended_prefix(&canonical.to_string_lossy()),
+        size,
+        total_bytes,
+        created_at: storage::now_secs(),
+        port: 0,
+    };
+    let status = start_site_with_fallback(&app, &state, &mut session)?;
+    state.sites.lock().unwrap().insert(session.id.clone(), session.clone());
+    handles.0.lock().unwrap().insert(session.id.clone(), status);
+    persist_sites(&state);
+    Ok(session)
+}
+
+#[tauri::command]
+fn remove_site(
+    state: State<'_, AppState>,
+    handles: State<'_, SiteServerHandle>,
+    id: String,
+) -> Result<(), String> {
+    if let Some(status) = handles.0.lock().unwrap().remove(&id) {
+        let _ = stop_server(&status);
+    }
+    state.sites.lock().unwrap().remove(&id);
+    persist_sites(&state);
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_sites(
+    state: State<'_, AppState>,
+    handles: State<'_, SiteServerHandle>,
+) -> Result<(), String> {
+    for (_, status) in handles.0.lock().unwrap().drain() {
+        let _ = stop_server(&status);
+    }
+    state.sites.lock().unwrap().clear();
+    persist_sites(&state);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_share_port(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    handle: State<'_, ServerHandle>,
+    port: u16,
+) -> Result<u16, String> {
+    if port == 0 {
+        return Err("端口无效".to_string());
+    }
+    let current = handle.0.lock().unwrap().as_ref().map(|s| s.port);
+    if current == Some(port) {
+        let mut cfg = read_config(&state);
+        cfg.share_port = Some(port);
+        write_config(&state, &cfg);
+        return Ok(port);
+    }
+    let status = start_server(app.clone(), port)
+        .map_err(|_| format!("端口 {port} 被占用，无法使用"))?;
+    let old = handle.0.lock().unwrap().replace(status);
+    if let Some(s) = old {
+        let _ = stop_server(&s);
+    }
+    *state.port.lock().unwrap() = port;
+    let mut cfg = read_config(&state);
+    cfg.share_port = Some(port);
+    write_config(&state, &cfg);
+    Ok(port)
+}
+
+#[tauri::command]
+fn set_site_port(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    handles: State<'_, SiteServerHandle>,
+    port: u16,
+) -> Result<u16, String> {
+    if port == 0 {
+        return Err("端口无效".to_string());
+    }
+    let mut sites: Vec<SiteSession> = state.sites.lock().unwrap().values().cloned().collect();
+    sites.sort_by_key(|s| (s.created_at, s.id.clone()));
+
+    let mut desired_ports = Vec::with_capacity(sites.len());
+    for idx in 0..sites.len() {
+        let p = port
+            .checked_add(idx as u16)
+            .ok_or_else(|| "端口超出范围".to_string())?;
+        desired_ports.push(p);
+    }
+
+    let mut guard = handles.0.lock().unwrap();
+    let old: Vec<(String, ServerStatus)> = guard.drain().collect();
+    for (_, s) in &old {
+        let _ = stop_server(s);
+    }
+
+    let mut new_statuses: Vec<(String, ServerStatus)> = Vec::new();
+    let mut assignments: Vec<(String, u16)> = Vec::new();
+
+    for (idx, site) in sites.into_iter().enumerate() {
+        let desired = desired_ports[idx];
+        match start_site_server(app.clone(), site.clone(), desired) {
+            Ok(status) => {
+                new_statuses.push((site.id.clone(), status));
+                assignments.push((site.id.clone(), desired));
+            }
+            Err(_) => {
+                for (_, s) in new_statuses {
+                    let _ = stop_server(&s);
+                }
+                for (id, status) in old {
+                    if let Some(site) = state.sites.lock().unwrap().get(&id) {
+                        if let Ok(s) = start_site_server(app.clone(), site.clone(), status.port) {
+                            guard.insert(id, s);
+                        }
+                    }
+                }
+                return Err(format!("端口 {desired} 被占用，无法使用"));
+            }
+        }
+    }
+
+    for (id, s) in new_statuses {
+        guard.insert(id, s);
+    }
+    drop(guard);
+
+    for (id, p) in assignments {
+        if let Some(site) = state.sites.lock().unwrap().get_mut(&id) {
+            site.port = p;
+        }
+    }
+    let mut cfg = read_config(&state);
+    cfg.site_port = Some(port);
+    write_config(&state, &cfg);
+    persist_sites(&state);
+    Ok(port)
 }
 
 #[tauri::command]
@@ -436,12 +705,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // Stable app dir holds config.json + shares.json; the user can
-            // redirect only download history via the Settings panel.
+            // Stable app dir holds config.json + shares.json + sites.json; the
+            // user can redirect only download history via the Settings panel.
             let default_dir = default_app_dir();
             std::fs::create_dir_all(&default_dir).ok();
 
             let app_state = AppState::new(default_dir.clone(), default_dir.clone(), DEFAULT_PORT);
+            let share_base = configured_share_port(&app_state);
 
             // If a previous run redirected the save dir, honour it before
             // starting the server or loading anything else.
@@ -454,8 +724,10 @@ pub fn run() {
 
             app.manage(app_state);
             app.manage(ServerHandle::default());
+            app.manage(SiteServerHandle::default());
 
             let handle = app.state::<ServerHandle>();
+            let site_handles = app.state::<SiteServerHandle>();
             let state = app.state::<AppState>();
 
             // Restore active shares so old links keep working after a restart.
@@ -463,8 +735,29 @@ pub fn run() {
                 session.path = strip_extended_prefix(&session.path);
                 state.shares.lock().unwrap().insert(session.id.clone(), session);
             }
+            for mut session in load_sites(&state) {
+                session.path = strip_extended_prefix(&session.path);
+                state.sites.lock().unwrap().insert(session.id.clone(), session);
+            }
+            let restored_sites: Vec<SiteSession> = {
+                let sites = state.sites.lock().unwrap();
+                sites.values().cloned().collect()
+            };
+            for mut session in restored_sites {
+                if let Ok(status) = start_site_with_fallback(&app.handle(), &state, &mut session) {
+                    site_handles
+                        .0
+                        .lock()
+                        .unwrap()
+                        .insert(session.id.clone(), status);
+                    state.sites.lock().unwrap().insert(session.id.clone(), session);
+                } else {
+                    eprintln!("[site] failed to restore site server: {}", session.name);
+                }
+            }
+            persist_sites(&state);
 
-            if let Ok(status) = try_bind(&app.handle()) {
+            if let Ok(status) = try_bind(&app.handle(), share_base) {
                 let bound = status.port;
                 *state.port.lock().unwrap() = bound;
                 *handle.0.lock().unwrap() = Some(status);
@@ -472,6 +765,38 @@ pub fn run() {
 
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title("RV NetShare");
+            }
+
+            #[cfg(windows)]
+            {
+                use webview2_com::Microsoft::Web::WebView2::Win32::{
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+                    ICoreWebView2_19,
+                };
+                use windows_core::Interface;
+
+                if let Some(main) = app.get_webview_window("main") {
+                    let event_window = main.clone();
+                    main.on_window_event(move |event| {
+                        if let tauri::WindowEvent::Focused(focused) = event {
+                            let level = if *focused {
+                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+                            } else {
+                                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+                            };
+                            let _ = event_window.with_webview(move |webview| {
+                                unsafe {
+                                    if let Ok(core) = webview.controller().CoreWebView2() {
+                                        if let Ok(core) = core.cast::<ICoreWebView2_19>() {
+                                            let _ = core.SetMemoryUsageTargetLevel(level);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
             }
 
             Ok(())
@@ -484,6 +809,12 @@ pub fn run() {
             create_share,
             remove_share,
             clear_shares,
+            list_sites,
+            create_site,
+            remove_site,
+            clear_sites,
+            set_share_port,
+            set_site_port,
             open_path,
             clear_history,
             remove_history_record,

@@ -11,6 +11,7 @@ interface Item { key: Tab; label: string; count?: () => number; }
 
 const items: Item[] = [
   { key: 'shares', label: '分享', count: () => state.shares.length },
+  { key: 'sites', label: '站点', count: () => state.sites.length },
   { key: 'history', label: '记录', count: () => state.history.length },
   { key: 'settings', label: '设置' },
 ];
