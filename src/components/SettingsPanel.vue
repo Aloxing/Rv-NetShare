@@ -322,7 +322,7 @@ async function onRefreshIp() {
             <div class="flex flex-col gap-1.5 p-3.5">
               <div class="flex items-center justify-between rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
                 <span class="text-[var(--color-text-muted)]">版本</span>
-                <span class="font-mono text-[var(--color-text)]">v0.1.0</span>
+                <span class="font-mono text-[var(--color-text)]">v0.2.0</span>
               </div>
               <div class="flex items-center justify-between rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
                 <span class="text-[var(--color-text-muted)]">本地数据</span>

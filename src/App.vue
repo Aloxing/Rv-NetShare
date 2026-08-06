@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { FolderDown } from '@lucide/vue';
 import AppNavBar from './components/AppNavBar.vue';
 import AppTitleBar from './components/AppTitleBar.vue';
@@ -19,7 +19,19 @@ const state = useAppState();
 let dragVisualUnlisten: (() => void) | null = null;
 
 onMounted(async () => {
-  await initAppState();
+  try {
+    await initAppState();
+    await nextTick();
+  } finally {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      await win.show();
+      await win.setFocus();
+    } catch (e) {
+      console.warn('show window failed', e);
+    }
+  }
   try {
     const { getCurrentWebview } = await import('@tauri-apps/api/webview');
     dragVisualUnlisten = await getCurrentWebview().onDragDropEvent((event) => {
