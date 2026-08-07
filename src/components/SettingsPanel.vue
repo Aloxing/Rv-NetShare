@@ -226,27 +226,27 @@ async function onRefreshIp() {
                 刷新 IP
               </button>
             </div>
-            <dl class="flex min-h-0 flex-1 flex-col divide-y divide-[var(--color-border-soft)] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)]">
+            <div class="flex w-full flex-col gap-1.5">
               <div v-for="row in [
                 { label: '主机名', value: hostname, copyLabel: '主机名' },
                 { label: '局域网 IP', value: localIp, copyLabel: 'IP' },
                 { label: '监听端口', value: port + '（被占用时自动 +1）', copyLabel: '' },
                 { label: '根地址', value: rootUrl, copyLabel: '根地址' },
-              ]" :key="row.label" class="grid grid-cols-[88px_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5">
-                <dt class="text-[11.5px] text-[var(--color-text-muted)]">{{ row.label }}</dt>
-                <dd class="min-w-0">
-                  <span class="block truncate font-mono text-[12px] text-[var(--color-text)]" :title="String(row.value)">{{ row.value }}</span>
-                </dd>
-                <button
-                  v-if="row.copyLabel"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                  @click="copy(String(row.value), row.copyLabel)"
-                  title="复制"
-                >
-                  <Copy :size="12" />
-                </button>
+              ]" :key="row.label" class="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
+                <span class="shrink-0 text-[var(--color-text-muted)]">{{ row.label }}</span>
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="min-w-0 truncate font-mono text-[var(--color-text)]" :title="String(row.value)">{{ row.value }}</span>
+                  <button
+                    v-if="row.copyLabel"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                    @click="copy(String(row.value), row.copyLabel)"
+                    title="复制"
+                  >
+                    <Copy :size="12" />
+                  </button>
+                </div>
               </div>
-            </dl>
+            </div>
           </section>
 
           <!-- 存储 -->
