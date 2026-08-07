@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
   <section class="flex h-full flex-col overflow-hidden">
     <div class="flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] px-5">
       <button
-        class="inline-flex h-9 items-center gap-2 rounded-lg bg-transparent px-3.5 text-[12.5px] font-medium text-[var(--color-accent)] transition hover:bg-transparent hover:text-[var(--color-accent-hover)] active:text-[var(--color-accent-pressed)]"
+        class="inline-flex h-9 items-center gap-2 rounded-lg bg-transparent px-3.5 text-[12.5px] font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent-hover)] active:text-[var(--color-accent-pressed)]"
         @click="pickFolders"
       >
         <FolderPlus :size="15" />
@@ -96,19 +96,19 @@ onBeforeUnmount(() => {
       </button>
       <div class="mx-1 h-5 w-px bg-[var(--color-border)]"></div>
       <form class="flex flex-1 items-center gap-2" @submit.prevent="submitPath">
-        <div class="flex h-9 flex-1 items-center gap-2 rounded-lg border border-[var(--color-input)] bg-[var(--color-bg)] px-3 transition focus-within:border-[var(--color-ring)] focus-within:ring-2 focus-within:ring-[var(--color-ring)]/20">
+        <div class="rv-input-wrap min-w-0 flex-1">
           <Link2 :size="14" class="shrink-0 text-[var(--color-text-subtle)]" />
           <input
             v-model="pathInput"
             type="text"
             placeholder="粘贴包含 index.html 的文件夹路径"
-            class="flex-1 bg-transparent text-[12.5px] text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-subtle)]"
+            class="rv-input text-[12.5px]"
             :disabled="submitting"
           />
         </div>
         <button
           type="submit"
-          class="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--color-border)] bg-transparent px-3.5 text-[12.5px] font-medium text-[var(--color-text)] transition hover:bg-transparent active:bg-transparent disabled:opacity-50"
+          class="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--color-border)] bg-transparent px-3.5 text-[12.5px] font-medium text-[var(--color-text)] transition hover:bg-[var(--color-bg-hover)] active:bg-[var(--color-bg-active)] disabled:opacity-50"
           :disabled="submitting || !pathInput.trim()"
         >
           <Plus :size="14" />
@@ -116,7 +116,7 @@ onBeforeUnmount(() => {
         </button>
       </form>
       <button
-        class="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-[12.5px] text-[var(--color-text-muted)] transition hover:bg-transparent hover:text-[var(--color-danger)] disabled:opacity-50"
+        class="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-[12.5px] text-[var(--color-text-muted)] transition hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)] disabled:opacity-50"
         :disabled="!state.sites.length"
         @click="stopAll"
       >

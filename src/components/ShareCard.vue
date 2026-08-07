@@ -133,35 +133,35 @@ async function showInFolder(path: string) {
       </div>
       <div class="flex items-center gap-0.5 opacity-70 transition group-hover:opacity-100">
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="二维码"
           @click.stop="openQrPreview"
         >
           <QrCode :size="14" />
         </button>
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="复制链接"
           @click.stop="copyLink(url)"
         >
           <Copy :size="14" />
         </button>
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="打开预览"
           @click.stop="openInBrowser(url)"
         >
           <ExternalLink :size="14" />
         </button>
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="定位文件"
           @click.stop="showInFolder(share.path)"
         >
           <FolderOpen :size="14" />
         </button>
         <button
-          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-danger)]"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]"
           :title="props.removeLabel || '停止分享'"
           @click.stop="emit('remove')"
         >
@@ -190,7 +190,7 @@ async function showInFolder(path: string) {
             二维码
           </div>
           <button
-            class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+            class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
             title="关闭"
             @click="closeQrPreview"
           >
@@ -206,7 +206,7 @@ async function showInFolder(path: string) {
           <div class="mt-3 flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)] px-3 py-2">
             <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="qrUrl">{{ qrUrl }}</span>
             <button
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-transparent hover:text-[var(--color-text)]"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
               title="复制链接"
               @click="copyLink(qrUrl)"
             >

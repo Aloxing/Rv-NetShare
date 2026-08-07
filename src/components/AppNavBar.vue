@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RadioTower } from '@lucide/vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { Tab } from '../types';
 import { useAppState } from '../composables/useAppState';
 
@@ -15,18 +15,63 @@ const items: Item[] = [
   { key: 'history', label: '记录', count: () => state.history.length },
   { key: 'settings', label: '设置' },
 ];
+
+const navRef = ref<HTMLElement | null>(null);
+const itemRefs = ref<(HTMLElement | null)[]>([]);
+const indicator = reactive({ left: 0, width: 0 });
+let resizeObserver: ResizeObserver | null = null;
+
+const indicatorStyle = computed(() => ({
+  left: indicator.left + 'px',
+  width: indicator.width + 'px',
+}));
+
+function setItemRef(el: unknown, index: number) {
+  itemRefs.value[index] = el as HTMLElement | null;
+}
+
+async function updateIndicator() {
+  await nextTick();
+  const nav = navRef.value;
+  if (!nav) return;
+  const index = items.findIndex((item) => item.key === props.active);
+  const el = itemRefs.value[index];
+  if (!el) return;
+  const navRect = nav.getBoundingClientRect();
+  const rect = el.getBoundingClientRect();
+  indicator.left = rect.left - navRect.left;
+  indicator.width = rect.width;
+}
+
+onMounted(() => {
+  void updateIndicator();
+  resizeObserver = new ResizeObserver(() => void updateIndicator());
+  if (navRef.value) resizeObserver.observe(navRef.value);
+});
+
+watch(() => props.active, () => { void updateIndicator(); });
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+});
 </script>
 
 <template>
-  <nav class="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] px-5">
-    <div class="flex items-center gap-1">
+  <nav class="flex h-12 shrink-0 items-center border-b border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] px-5">
+    <div ref="navRef" class="relative flex h-10 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-panel)] p-1 shadow-[inset_0_1px_2px_rgb(0_0_0/0.06)]">
+      <div
+        class="pointer-events-none absolute bottom-1 top-1 rounded-full bg-[var(--color-accent)] shadow-[var(--shadow-card)] transition-all duration-300 ease-out"
+        :style="indicatorStyle"
+      ></div>
       <button
-        v-for="item in items"
+        v-for="(item, index) in items"
         :key="item.key"
-        class="flex h-8 items-center gap-2 rounded-lg px-3.5 text-[13px] transition-colors"
+        :ref="(el) => setItemRef(el, index)"
+        class="group relative z-10 flex h-8 w-24 items-center justify-center gap-2 rounded-full text-[13px] transition-all duration-150 active:scale-[0.97]"
         :class="props.active === item.key
-          ? 'bg-transparent font-medium text-[var(--color-accent)]'
-          : 'bg-transparent text-[var(--color-text-muted)] hover:bg-transparent hover:text-[var(--color-text)]'"
+          ? 'font-medium text-[var(--color-accent-fg)]'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-accent)]'"
         @click="emit('change', item.key)"
       >
         <span class="whitespace-nowrap">{{ item.label }}</span>
@@ -34,22 +79,12 @@ const items: Item[] = [
           v-if="item.count && item.count() > 0"
           class="min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold tabular-nums"
           :class="props.active === item.key
-            ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-            : 'bg-[var(--color-bg-hover)] text-[var(--color-text-subtle)]'"
+            ? 'bg-[var(--color-accent-fg)]/15 text-[var(--color-accent-fg)]'
+            : 'bg-[var(--color-bg-hover)] text-[var(--color-text-subtle)] group-hover:bg-[var(--color-bg-active)]'"
         >
           {{ item.count() }}
         </span>
       </button>
-    </div>
-    <div class="flex items-center gap-2 rounded-full border border-[var(--color-border)] py-1.5 pl-3 pr-4 text-[12px]">
-      <span class="relative flex h-2 w-2">
-        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-success)] opacity-50"></span>
-        <span class="relative inline-flex h-2 w-2 rounded-full bg-[var(--color-success)]"></span>
-      </span>
-      <RadioTower :size="14" class="text-[var(--color-text-muted)]" />
-      <span class="font-medium text-[var(--color-text-muted)]">Receiver</span>
-      <span class="text-[var(--color-border-strong)]">·</span>
-      <span class="font-mono text-[11.5px] text-[var(--color-text-muted)]">{{ state.initial?.local_ip ?? '-' }}:{{ state.initial?.port ?? '-' }}</span>
     </div>
   </nav>
 </template>

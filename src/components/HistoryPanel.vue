@@ -48,7 +48,7 @@ async function onRemove(item: AccessRecord) {
         <span class="rounded-full bg-[var(--color-bg-hover)] px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-[var(--color-text-muted)]">{{ state.history.length }}</span>
       </div>
       <button
-        class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-[12px] text-[var(--color-text-muted)] transition hover:bg-transparent hover:text-[var(--color-danger)] disabled:opacity-50"
+        class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-[12px] text-[var(--color-text-muted)] transition hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)] disabled:opacity-50"
         :disabled="!state.history.length"
         @click="onClear"
       >
@@ -113,7 +113,7 @@ async function onRemove(item: AccessRecord) {
                 <td class="px-4 py-3 align-middle font-mono text-[11px] text-[var(--color-text-muted)]">{{ formatTimestamp(item.timestamp) }}</td>
                 <td class="px-4 py-3 text-right align-middle">
                   <button
-                    class="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-transparent hover:text-[var(--color-danger)]"
+                    class="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]"
                     title="删除记录"
                     @click="onRemove(item)"
                   >

@@ -2,6 +2,7 @@ import { reactive, readonly } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { AccessRecord, InitialState, PathCheck, ShareSession, SiteSession } from '../types';
+import { loadThemeMode, setThemeMode as persistThemeMode, type ThemeMode } from '../utils/theme';
 
 // =============================================================================
 // Global drag-drop handler registry.
@@ -32,6 +33,7 @@ type ReactiveState = {
   history: AccessRecord[];
   toasts: Toast[];
   fontSize: number;
+  theme: ThemeMode;
 };
 
 const FONT_KEY = 'lan:fontSize';
@@ -60,6 +62,7 @@ const state = reactive<ReactiveState>({
   history: [],
   toasts: [],
   fontSize: loadFontSize(),
+  theme: loadThemeMode(),
 });
 
 function mutate(fn: (s: ReactiveState) => void) {
@@ -257,6 +260,11 @@ export function setFontSize(n: number) {
   const clamped = Math.min(18, Math.max(11, Math.round(n)));
   mutate((s) => { s.fontSize = clamped; });
   persistFontSize(clamped);
+}
+
+export function setThemeMode(mode: ThemeMode) {
+  persistThemeMode(mode);
+  mutate((s) => { s.theme = mode; });
 }
 
 export function pushToast(kind: ToastKind, text: string) {

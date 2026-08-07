@@ -31,6 +31,7 @@
   --color-border-soft: hsl(240 6% 94%);
   --color-input: hsl(240 6% 90%);
   --color-ring: hsl(240 10% 4%);
+  --color-ring-soft: hsl(240 4% 58%);
   --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-popup: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
   --shadow-toolwindow: 0 1px 0 hsl(240 6% 90%);
@@ -40,7 +41,7 @@
   --font-base-size: 14px;
 }
 
-.theme-dark {
+:root.theme-dark {
   color-scheme: dark;
   --color-bg: hsl(240 10% 3.5%);
   --color-bg-elevated: hsl(240 6% 9%);
@@ -72,9 +73,14 @@
   --color-border-soft: hsl(240 5% 11%);
   --color-input: hsl(240 5% 15%);
   --color-ring: hsl(0 0% 98%);
+  --color-ring-soft: hsl(240 5% 66%);
   --shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.35), 0 8px 24px -12px rgb(0 0 0 / 0.6);
   --shadow-popup: 0 12px 24px -6px rgb(0 0 0 / 0.55), 0 4px 8px -4px rgb(0 0 0 / 0.4);
   --shadow-toolwindow: 0 1px 0 hsl(240 5% 14%);
+}
+
+:root.theme-light {
+  color-scheme: light;
 }
 
 :root {
@@ -109,6 +115,58 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 *:focus-visible {
   outline: 2px solid var(--color-ring);
   outline-offset: 1px;
+}
+
+.rv-input,
+.rv-input-wrap {
+  height: 2.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  background: var(--color-bg-panel);
+  color: var(--color-text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.rv-input {
+  width: 100%;
+  padding: 0 0.75rem;
+  outline: none;
+}
+
+.rv-input::placeholder {
+  color: var(--color-text-subtle);
+}
+
+.rv-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+}
+
+.rv-input-wrap .rv-input {
+  height: 100%;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.rv-input:hover,
+.rv-input-wrap:hover {
+  border-color: var(--color-border-strong);
+}
+
+.rv-input:focus,
+.rv-input-wrap:focus-within {
+  border-color: var(--color-ring-soft);
+  box-shadow: 0 0 0 3px rgb(128 128 140 / 0.14);
+}
+
+.rv-input-wrap .rv-input:focus {
+  border-color: transparent;
+  box-shadow: none;
 }
 
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }

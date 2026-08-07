@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { Clock3, FolderOpen } from '@lucide/vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useAppState } from '../composables/useAppState';
 
 const props = defineProps<{ shares: number; sites: number; history: number; }>();
+const state = useAppState();
 
 const clock = ref(new Date());
 let timer: number | null = null;
@@ -29,7 +31,8 @@ const time = computed(() => {
       <span class="flex items-center gap-1.5"><Clock3 :size="13" />{{ props.history }} 条记录</span>
     </div>
     <div class="flex items-center gap-4">
-      <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-[var(--color-success)]"></span>LAN</span>
+      <span class="font-mono tabular-nums">{{ state.initial?.local_ip ?? '-' }}:{{ state.initial?.port ?? '-' }}</span>
+      <span class="h-3 w-px bg-[var(--color-border)]"></span>
       <span class="font-mono tabular-nums">{{ time }}</span>
     </div>
   </footer>
