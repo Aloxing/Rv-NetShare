@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State};
 
 use crate::net::{get_hostname, get_local_ip};
@@ -99,6 +101,14 @@ fn random_id() -> String {
         x = x.wrapping_mul(0x100000001b3);
     }
     out
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 /// Windows `canonicalize()` can return `\\?\`-prefixed extended paths; strip
@@ -1216,6 +1226,44 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title("RV NetShare");
             }
+
+            if let Some(win) = app.get_webview_window("main") {
+                let hide_window = win.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hide_window.hide();
+                    }
+                });
+            }
+
+            let show_item = MenuItemBuilder::with_id("show", "显示主界面").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+            let icon = app.default_window_icon().cloned().ok_or("缺少应用图标")?;
+            let _tray = TrayIconBuilder::with_id("main")
+                .icon(icon)
+                .tooltip("RV NetShare")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
 
             #[cfg(windows)]
             {

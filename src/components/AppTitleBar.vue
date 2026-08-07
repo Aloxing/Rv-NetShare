@@ -69,7 +69,7 @@ function closeWindow() { void appWindow.close(); }
         </button>
         <button
           class="flex w-11 items-center justify-center text-[var(--color-text-muted)] transition hover:bg-[var(--color-danger)] hover:text-[var(--color-accent-fg)]"
-          title="关闭"
+          title="关闭到托盘"
           @click.stop="closeWindow"
         >
           <X :size="15" />
