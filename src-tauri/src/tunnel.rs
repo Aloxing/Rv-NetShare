@@ -7,11 +7,19 @@ use std::time::Duration;
 
 use ngrok::config::ForwarderBuilder;
 use ngrok::forwarder::Forwarder;
+use ngrok::Error as NgrokError;
 use ngrok::prelude::{EndpointInfo, TunnelCloser};
 use ngrok::tunnel::HttpTunnel;
 use ngrok::Session;
 use tokio::runtime::Runtime;
 use url::Url;
+
+fn ngrok_error(context: &str, err: impl NgrokError) -> String {
+    match err.error_code() {
+        Some(code) => format!("{context}: {code}: {}", err.msg()),
+        None => format!("{context}: {err}"),
+    }
+}
 
 enum TunnelCommand {
     Start {
@@ -190,7 +198,7 @@ async fn start_tunnel(
             let sess = builder
                 .connect()
                 .await
-                .map_err(|e| format!("ngrok 连接失败: {e}"))?;
+                .map_err(|e| ngrok_error("ngrok 连接失败", e))?;
             *session_slot = Some((token_key, sess.clone()));
             sess
         }
@@ -202,7 +210,7 @@ async fn start_tunnel(
         .metadata(format!("rv-netshare:{key}"))
         .listen_and_forward(target_url)
         .await
-        .map_err(|e| format!("ngrok 隧道创建失败: {e}"))?;
+        .map_err(|e| ngrok_error("ngrok 隧道创建失败", e))?;
     let public_url = forwarder.url().to_string();
     tunnels.insert(key, forwarder);
     Ok(public_url)

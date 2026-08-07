@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { Copy, ExternalLink, File, Folder, FolderOpen, Globe, QrCode, Trash2, X } from '@lucide/vue';
+import { Copy, ExternalLink, File, Folder, FolderOpen, Globe, Link2, QrCode, Trash2, X } from '@lucide/vue';
 import { toDataURL } from 'qrcode';
 import { openPath, pushToast } from '../composables/useAppState';
 import { formatBytes, formatTimestamp } from '../utils/format';
@@ -29,21 +29,23 @@ const displayPath = computed(() =>
 );
 
 const qrOpen = ref(false);
-const displayUrl = computed(() => props.ngrokUrl || props.url);
-const qrUrl = ref(displayUrl.value);
+const qrMode = ref<'local' | 'public'>('local');
+const activeQrUrl = computed(() =>
+  qrMode.value === 'public' && props.ngrokUrl ? props.ngrokUrl : props.url,
+);
+const qrUrl = ref(props.url);
 const qrDataUrl = ref('');
 const qrLoading = ref(false);
 const qrError = ref('');
 let qrKeydown: ((e: KeyboardEvent) => void) | null = null;
 
-async function openQrPreview() {
-  qrUrl.value = displayUrl.value;
-  qrOpen.value = true;
+async function renderQr() {
+  qrUrl.value = activeQrUrl.value;
   qrLoading.value = true;
   qrError.value = '';
   qrDataUrl.value = '';
   try {
-    qrDataUrl.value = await toDataURL(displayUrl.value, {
+    qrDataUrl.value = await toDataURL(activeQrUrl.value, {
       width: 280,
       margin: 2,
       errorCorrectionLevel: 'M',
@@ -54,6 +56,18 @@ async function openQrPreview() {
   } finally {
     qrLoading.value = false;
   }
+}
+
+async function openQrPreview() {
+  qrMode.value = 'local';
+  qrOpen.value = true;
+  await renderQr();
+}
+
+async function selectQrMode(mode: 'local' | 'public') {
+  if (qrMode.value === mode) return;
+  qrMode.value = mode;
+  await renderQr();
 }
 
 function closeQrPreview() {
@@ -74,8 +88,8 @@ watch(qrOpen, (open) => {
   }
 });
 
-watch(() => displayUrl.value, () => {
-  if (qrOpen.value) void openQrPreview();
+watch([() => props.url, () => props.ngrokUrl], () => {
+  if (qrOpen.value) void renderQr();
 });
 
 onBeforeUnmount(() => {
@@ -157,14 +171,14 @@ async function showInFolder(path: string) {
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="复制链接"
-          @click.stop="copyLink(displayUrl)"
+          @click.stop="copyLink(url)"
         >
           <Copy :size="14" />
         </button>
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="打开预览"
-          @click.stop="openInBrowser(displayUrl)"
+          @click.stop="openInBrowser(url)"
         >
           <ExternalLink :size="14" />
         </button>
@@ -187,8 +201,28 @@ async function showInFolder(path: string) {
     <div class="flex items-center gap-2 rounded-lg bg-[var(--color-bg-panel)] px-3 py-1.5">
       <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="displayPath">{{ displayPath }}</span>
     </div>
+    <div class="flex items-center gap-2 rounded-lg bg-[var(--color-bg-panel)] px-3 py-1.5">
+      <Link2 :size="12" class="shrink-0 text-[var(--color-text-subtle)]" />
+      <span class="shrink-0 rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--color-text-muted)]">本地</span>
+      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="url">{{ url }}</span>
+      <button
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+        title="复制本地链接"
+        @click.stop="copyLink(url)"
+      >
+        <Copy :size="12" />
+      </button>
+      <button
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+        title="打开本地链接"
+        @click.stop="openInBrowser(url)"
+      >
+        <ExternalLink :size="12" />
+      </button>
+    </div>
     <div v-if="ngrokUrl" class="flex items-center gap-2 rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-3 py-1.5">
       <Globe :size="12" class="shrink-0 text-[var(--color-accent)]" />
+      <span class="shrink-0 rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--color-accent)]">公网</span>
       <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text)]" :title="ngrokUrl">{{ ngrokUrl }}</span>
       <button
         class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
@@ -231,6 +265,30 @@ async function showInFolder(path: string) {
           </button>
         </div>
         <div class="p-4">
+          <div v-if="ngrokUrl" class="mb-3 flex items-center gap-1 rounded-lg bg-[var(--color-bg-panel)] p-1">
+            <button
+              class="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-[11.5px] font-medium transition disabled:opacity-50"
+              :class="qrMode === 'local'
+                ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text)] shadow-sm'
+                : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'"
+              :disabled="qrLoading"
+              @click="selectQrMode('local')"
+            >
+              <Link2 :size="12" />
+              本地
+            </button>
+            <button
+              class="flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-[11.5px] font-medium transition disabled:opacity-50"
+              :class="qrMode === 'public'
+                ? 'bg-[var(--color-bg-elevated)] text-[var(--color-accent)] shadow-sm'
+                : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'"
+              :disabled="qrLoading"
+              @click="selectQrMode('public')"
+            >
+              <Globe :size="12" />
+              公网
+            </button>
+          </div>
           <div class="flex items-center justify-center rounded-lg border border-[var(--color-border)] bg-white p-4">
             <img v-if="qrDataUrl" :src="qrDataUrl" alt="分享二维码" class="h-56 w-56" />
             <div v-else-if="qrLoading" class="flex h-56 w-56 items-center justify-center text-[12px] text-[var(--color-text-muted)]">生成中</div>
