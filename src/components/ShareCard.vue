@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { Copy, ExternalLink, File, Folder, FolderOpen, QrCode, Trash2, X } from '@lucide/vue';
+import { Copy, ExternalLink, File, Folder, FolderOpen, Globe, QrCode, Trash2, X } from '@lucide/vue';
 import { toDataURL } from 'qrcode';
 import { openPath, pushToast } from '../composables/useAppState';
 import { formatBytes, formatTimestamp } from '../utils/format';
@@ -9,13 +9,16 @@ import type { ShareSession } from '../types';
 const props = defineProps<{
   share: ShareSession;
   url: string;
+  ngrokUrl?: string;
   selected?: boolean;
   removeLabel?: string;
+  tunnelBusy?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'select'): void;
   (e: 'remove'): void;
+  (e: 'toggle-tunnel'): void;
 }>();
 
 const isFolder = computed(() => props.share.kind === 'folder');
@@ -26,20 +29,21 @@ const displayPath = computed(() =>
 );
 
 const qrOpen = ref(false);
-const qrUrl = ref(props.url);
+const displayUrl = computed(() => props.ngrokUrl || props.url);
+const qrUrl = ref(displayUrl.value);
 const qrDataUrl = ref('');
 const qrLoading = ref(false);
 const qrError = ref('');
 let qrKeydown: ((e: KeyboardEvent) => void) | null = null;
 
 async function openQrPreview() {
-  qrUrl.value = props.url;
+  qrUrl.value = displayUrl.value;
   qrOpen.value = true;
   qrLoading.value = true;
   qrError.value = '';
   qrDataUrl.value = '';
   try {
-    qrDataUrl.value = await toDataURL(props.url, {
+    qrDataUrl.value = await toDataURL(displayUrl.value, {
       width: 280,
       margin: 2,
       errorCorrectionLevel: 'M',
@@ -70,7 +74,7 @@ watch(qrOpen, (open) => {
   }
 });
 
-watch(() => props.url, () => {
+watch(() => displayUrl.value, () => {
   if (qrOpen.value) void openQrPreview();
 });
 
@@ -133,6 +137,17 @@ async function showInFolder(path: string) {
       </div>
       <div class="flex items-center gap-0.5 opacity-70 transition group-hover:opacity-100">
         <button
+          class="flex h-7 w-7 items-center justify-center rounded-md transition disabled:opacity-50"
+          :class="ngrokUrl
+            ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-fg)]'
+            : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'"
+          :title="ngrokUrl ? '关闭公网访问' : '开启公网访问'"
+          :disabled="tunnelBusy"
+          @click.stop="emit('toggle-tunnel')"
+        >
+          <Globe :size="14" />
+        </button>
+        <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="二维码"
           @click.stop="openQrPreview"
@@ -142,14 +157,14 @@ async function showInFolder(path: string) {
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="复制链接"
-          @click.stop="copyLink(url)"
+          @click.stop="copyLink(displayUrl)"
         >
           <Copy :size="14" />
         </button>
         <button
           class="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
           title="打开预览"
-          @click.stop="openInBrowser(url)"
+          @click.stop="openInBrowser(displayUrl)"
         >
           <ExternalLink :size="14" />
         </button>
@@ -171,6 +186,24 @@ async function showInFolder(path: string) {
     </div>
     <div class="flex items-center gap-2 rounded-lg bg-[var(--color-bg-panel)] px-3 py-1.5">
       <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="displayPath">{{ displayPath }}</span>
+    </div>
+    <div v-if="ngrokUrl" class="flex items-center gap-2 rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-accent-soft)] px-3 py-1.5">
+      <Globe :size="12" class="shrink-0 text-[var(--color-accent)]" />
+      <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text)]" :title="ngrokUrl">{{ ngrokUrl }}</span>
+      <button
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+        title="复制公网链接"
+        @click.stop="copyLink(ngrokUrl)"
+      >
+        <Copy :size="12" />
+      </button>
+      <button
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-subtle)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+        title="打开公网链接"
+        @click.stop="openInBrowser(ngrokUrl)"
+      >
+        <ExternalLink :size="12" />
+      </button>
     </div>
   </div>
 

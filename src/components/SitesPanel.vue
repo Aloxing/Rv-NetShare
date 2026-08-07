@@ -9,6 +9,8 @@ import {
   pushToast,
   removeSite,
   setDropHandler,
+  startSiteTunnel,
+  stopSiteTunnel,
   useAppState,
 } from '../composables/useAppState';
 import ShareCard from './ShareCard.vue';
@@ -18,12 +20,37 @@ const state = useAppState();
 const pathInput = ref<string>('');
 const submitting = ref(false);
 const selectedId = ref<string | null>(null);
+const tunnelBusyId = ref<string | null>(null);
 
 const urlFor = (site: SiteSession) =>
   buildSiteUrl(
     state.initial?.local_ip ?? '127.0.0.1',
     site.port,
   );
+
+const ngrokUrlFor = (site: SiteSession) => state.ngrokUrls['site:' + site.id];
+
+async function toggleSiteTunnel(site: SiteSession) {
+  if (tunnelBusyId.value === site.id) return;
+  if (!state.initial?.ngrok_authtoken && !state.ngrokUrls['site:' + site.id]) {
+    pushToast('error', '请先在设置中配置 ngrok Authtoken');
+    return;
+  }
+  tunnelBusyId.value = site.id;
+  try {
+    if (state.ngrokUrls['site:' + site.id]) {
+      await stopSiteTunnel(site.id);
+      pushToast('success', '已关闭公网访问');
+    } else {
+      await startSiteTunnel(site.id);
+      pushToast('success', '公网地址已生成');
+    }
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    tunnelBusyId.value = null;
+  }
+}
 
 async function addSitePath(raw: string) {
   const path = raw.trim();
@@ -133,10 +160,13 @@ onBeforeUnmount(() => {
             :key="site.id"
             :share="site"
             :url="urlFor(site)"
+            :ngrok-url="ngrokUrlFor(site)"
             :selected="selectedId === site.id"
+            :tunnel-busy="tunnelBusyId === site.id"
             remove-label="移除站点"
             @select="selectedId = site.id"
             @remove="stopSite(site.id)"
+            @toggle-tunnel="toggleSiteTunnel(site)"
           />
         </div>
 

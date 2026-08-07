@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Copy, FolderCog, Globe, HardDrive, Info, Laptop, Minus, Plus, RadioTower, RefreshCw, Settings, Type } from '@lucide/vue';
+import { Copy, ExternalLink, FolderCog, Globe, HardDrive, Info, Laptop, Minus, Plus, RadioTower, RefreshCw, Settings, Type, Waypoints } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   pushToast,
   refreshLocalIp,
   setFontSize,
+  setNgrokAuthtoken,
   setSaveDir,
   setSharePort,
   setSitePort,
@@ -13,12 +14,13 @@ import {
   useAppState,
 } from '../composables/useAppState';
 
-type SectionKey = 'identity' | 'storage' | 'ports' | 'appearance' | 'about';
+type SectionKey = 'identity' | 'storage' | 'ports' | 'tunnel' | 'appearance' | 'about';
 
 const sectionItems = [
   { key: 'identity', label: '身份', icon: Laptop },
   { key: 'storage', label: '存储', icon: HardDrive },
   { key: 'ports', label: '端口', icon: RadioTower },
+  { key: 'tunnel', label: '穿透', icon: Waypoints },
   { key: 'appearance', label: '界面', icon: Type },
   { key: 'about', label: '关于', icon: Info },
 ] as const;
@@ -38,6 +40,8 @@ const sharePortInput = ref<string>(String(state.initial?.share_port ?? 48721));
 const sitePortInput = ref<string>(String(state.initial?.site_port ?? 48800));
 const submittingSharePort = ref(false);
 const submittingSitePort = ref(false);
+const authtokenInput = ref<string>(state.initial?.ngrok_authtoken ?? '');
+const applyingToken = ref(false);
 
 const hostname = computed(() => state.initial?.hostname ?? '-');
 const localIp = computed(() => state.initial?.local_ip ?? '-');
@@ -52,6 +56,7 @@ watch(() => state.initial, (initial) => {
     saveDirInput.value = initial.save_dir;
     sharePortInput.value = String(initial.share_port ?? 48721);
     sitePortInput.value = String(initial.site_port ?? 48800);
+    authtokenInput.value = initial.ngrok_authtoken ?? '';
   }
 }, { immediate: true });
 
@@ -135,6 +140,28 @@ async function resetPorts() {
   sitePortInput.value = '48800';
   await applySharePort();
   await applySitePort();
+}
+
+async function saveNgrokToken() {
+  if (applyingToken.value) return;
+  applyingToken.value = true;
+  try {
+    await setNgrokAuthtoken(authtokenInput.value);
+    pushToast('success', 'ngrok Authtoken 已保存');
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    applyingToken.value = false;
+  }
+}
+
+async function openNgrokSite() {
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl('https://dashboard.ngrok.com/get-started/your-authtoken');
+  } catch (err) {
+    pushToast('error', String(err));
+  }
 }
 
 function bumpFont(delta: number) { setFontSize(state.fontSize + delta); }
@@ -316,6 +343,54 @@ async function onRefreshIp() {
                   </button>
                 </form>
               </div>
+            </div>
+          </section>
+
+          <!-- 穿透 -->
+          <section v-show="activeSection === 'tunnel'" class="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+            <div class="mb-3 flex h-7 items-center gap-2">
+              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-icon-accent-soft)] text-[var(--color-icon-accent)]">
+                <Waypoints :size="14" />
+              </div>
+              <span class="text-[12.5px] font-semibold">内网穿透</span>
+            </div>
+            <div class="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)] p-3">
+              <div class="mb-2 flex h-6 items-center justify-between gap-2">
+                <span class="text-[11.5px] font-medium leading-none text-[var(--color-text-muted)]">ngrok Authtoken</span>
+                <div class="flex h-6 items-center gap-2">
+                  <button
+                    class="inline-flex h-6 items-center gap-1 rounded-md px-2 text-[10.5px] font-medium leading-none text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent-hover)]"
+                    type="button"
+                    @click="openNgrokSite"
+                  >
+                    <ExternalLink :size="11" />
+                    获取 Authtoken
+                  </button>
+                  <span
+                    class="text-[11px] font-medium leading-none"
+                    :class="state.initial?.ngrok_authtoken ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-subtle)]'"
+                  >
+                    {{ state.initial?.ngrok_authtoken ? '已配置' : '未配置' }}
+                  </span>
+                </div>
+              </div>
+              <form class="flex gap-2" @submit.prevent="saveNgrokToken">
+                <input
+                  v-model="authtokenInput"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="粘贴 ngrok Authtoken"
+                  class="rv-input h-9 min-w-0 flex-1 font-mono text-[11.5px]"
+                  :disabled="applyingToken"
+                />
+                <button
+                  type="submit"
+                  class="inline-flex h-9 shrink-0 items-center rounded-lg bg-transparent px-3 text-[11.5px] font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+                  :disabled="applyingToken"
+                >
+                  保存
+                </button>
+              </form>
             </div>
           </section>
 

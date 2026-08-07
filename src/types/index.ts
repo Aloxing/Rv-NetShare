@@ -38,6 +38,7 @@ export interface InitialState {
   sites: SiteSession[];
   share_port: number | null;
   site_port: number | null;
+  ngrok_authtoken: string | null;
   history: AccessRecord[];
 }
 

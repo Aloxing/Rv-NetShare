@@ -10,6 +10,8 @@ import {
   removeShare,
   resolveSharePaths,
   setDropHandler,
+  startShareTunnel,
+  stopShareTunnel,
   useAppState,
 } from '../composables/useAppState';
 import ShareCard from './ShareCard.vue';
@@ -20,6 +22,7 @@ const pathInput = ref<string>('');
 const submitting = ref(false);
 const selectedId = ref<string | null>(null);
 const refreshingIp = ref(false);
+const tunnelBusyId = ref<string | null>(null);
 
 const urlFor = (share: ShareSession) =>
   buildShareUrl(
@@ -27,6 +30,30 @@ const urlFor = (share: ShareSession) =>
     state.initial?.port ?? 0,
     share.id,
   );
+
+const ngrokUrlFor = (share: ShareSession) => state.ngrokUrls['share:' + share.id];
+
+async function toggleShareTunnel(share: ShareSession) {
+  if (tunnelBusyId.value === share.id) return;
+  if (!state.initial?.ngrok_authtoken && !state.ngrokUrls['share:' + share.id]) {
+    pushToast('error', '请先在设置中配置 ngrok Authtoken');
+    return;
+  }
+  tunnelBusyId.value = share.id;
+  try {
+    if (state.ngrokUrls['share:' + share.id]) {
+      await stopShareTunnel(share.id);
+      pushToast('success', '已关闭公网访问');
+    } else {
+      await startShareTunnel(share.id);
+      pushToast('success', '公网地址已生成');
+    }
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    tunnelBusyId.value = null;
+  }
+}
 
 async function sharePaths(paths: string[]) {
   const cleaned = paths.map((p) => p.trim()).filter((p) => p.length > 0);
@@ -191,9 +218,12 @@ const folderShares = computed(() => state.shares.filter((s) => s.kind === 'folde
               :key="share.id"
               :share="share"
               :url="urlFor(share)"
+              :ngrok-url="ngrokUrlFor(share)"
               :selected="selectedId === share.id"
+              :tunnel-busy="tunnelBusyId === share.id"
               @select="selectedId = share.id"
               @remove="stopShare(share.id)"
+              @toggle-tunnel="toggleShareTunnel(share)"
             />
           </div>
         </div>
@@ -210,9 +240,12 @@ const folderShares = computed(() => state.shares.filter((s) => s.kind === 'folde
               :key="share.id"
               :share="share"
               :url="urlFor(share)"
+              :ngrok-url="ngrokUrlFor(share)"
               :selected="selectedId === share.id"
+              :tunnel-busy="tunnelBusyId === share.id"
               @select="selectedId = share.id"
               @remove="stopShare(share.id)"
+              @toggle-tunnel="toggleShareTunnel(share)"
             />
           </div>
         </div>

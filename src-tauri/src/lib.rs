@@ -16,6 +16,7 @@ mod net;
 pub mod server;
 pub mod state;
 mod storage;
+mod tunnel;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ use crate::storage::{
     ensure_data_dir, read_history, read_shares, read_sites, reveal_in_explorer, write_history,
     write_shares, write_sites, AccessRecord,
 };
+use crate::tunnel::TunnelManager;
 
 #[derive(Default)]
 struct ServerHandle(Mutex<Option<ServerStatus>>);
@@ -48,6 +50,7 @@ struct InitialState {
     sites: Vec<SiteSession>,
     share_port: Option<u16>,
     site_port: Option<u16>,
+    ngrok_authtoken: Option<String>,
     history: Vec<AccessRecord>,
 }
 
@@ -56,6 +59,7 @@ struct AppConfig {
     save_dir: Option<String>,
     share_port: Option<u16>,
     site_port: Option<u16>,
+    ngrok_authtoken: Option<String>,
 }
 
 const DEFAULT_PORT: u16 = 48721;
@@ -218,6 +222,7 @@ fn app_initial_state(state: State<'_, AppState>) -> Result<InitialState, String>
         sites,
         share_port: cfg.share_port,
         site_port: cfg.site_port,
+        ngrok_authtoken: cfg.ngrok_authtoken,
         history,
     })
 }
@@ -317,14 +322,26 @@ fn create_share(state: State<'_, AppState>, path: String) -> Result<ShareSession
 }
 
 #[tauri::command]
-fn remove_share(state: State<'_, AppState>, id: String) -> Result<(), String> {
+async fn remove_share(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    id: String,
+) -> Result<(), String> {
+    let _ = tunnels.stop(format!("share:{id}"));
     state.shares.lock().unwrap().remove(&id);
     persist_shares(&state);
     Ok(())
 }
 
 #[tauri::command]
-fn clear_shares(state: State<'_, AppState>) -> Result<(), String> {
+async fn clear_shares(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+) -> Result<(), String> {
+    let ids: Vec<String> = state.shares.lock().unwrap().keys().cloned().collect();
+    for id in ids {
+        let _ = tunnels.stop(format!("share:{id}"));
+    }
     state.shares.lock().unwrap().clear();
     persist_shares(&state);
     Ok(())
@@ -427,11 +444,13 @@ fn create_site(
 }
 
 #[tauri::command]
-fn remove_site(
+async fn remove_site(
     state: State<'_, AppState>,
     handles: State<'_, SiteServerHandle>,
+    tunnels: State<'_, TunnelManager>,
     id: String,
 ) -> Result<(), String> {
+    let _ = tunnels.stop(format!("site:{id}"));
     if let Some(status) = handles.0.lock().unwrap().remove(&id) {
         let _ = stop_server(&status);
     }
@@ -441,10 +460,15 @@ fn remove_site(
 }
 
 #[tauri::command]
-fn clear_sites(
+async fn clear_sites(
     state: State<'_, AppState>,
     handles: State<'_, SiteServerHandle>,
+    tunnels: State<'_, TunnelManager>,
 ) -> Result<(), String> {
+    let ids: Vec<String> = state.sites.lock().unwrap().keys().cloned().collect();
+    for id in ids {
+        let _ = tunnels.stop(format!("site:{id}"));
+    }
     for (_, status) in handles.0.lock().unwrap().drain() {
         let _ = stop_server(&status);
     }
@@ -454,10 +478,11 @@ fn clear_sites(
 }
 
 #[tauri::command]
-fn set_share_port(
+async fn set_share_port(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     handle: State<'_, ServerHandle>,
+    tunnels: State<'_, TunnelManager>,
     port: u16,
 ) -> Result<u16, String> {
     if port == 0 {
@@ -469,6 +494,10 @@ fn set_share_port(
         cfg.share_port = Some(port);
         write_config(&state, &cfg);
         return Ok(port);
+    }
+    let ids: Vec<String> = state.shares.lock().unwrap().keys().cloned().collect();
+    for id in ids {
+        let _ = tunnels.stop(format!("share:{id}"));
     }
     let status = start_server(app.clone(), port)
         .map_err(|_| format!("端口 {port} 被占用，无法使用"))?;
@@ -484,10 +513,11 @@ fn set_share_port(
 }
 
 #[tauri::command]
-fn set_site_port(
+async fn set_site_port(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     handles: State<'_, SiteServerHandle>,
+    tunnels: State<'_, TunnelManager>,
     port: u16,
 ) -> Result<u16, String> {
     if port == 0 {
@@ -495,6 +525,10 @@ fn set_site_port(
     }
     let mut sites: Vec<SiteSession> = state.sites.lock().unwrap().values().cloned().collect();
     sites.sort_by_key(|s| (s.created_at, s.id.clone()));
+    let ids: Vec<String> = state.sites.lock().unwrap().keys().cloned().collect();
+    for id in ids {
+        let _ = tunnels.stop(format!("site:{id}"));
+    }
 
     let mut desired_ports = Vec::with_capacity(sites.len());
     for idx in 0..sites.len() {
@@ -551,6 +585,84 @@ fn set_site_port(
     write_config(&state, &cfg);
     persist_sites(&state);
     Ok(port)
+}
+
+#[tauri::command]
+async fn set_ngrok_authtoken(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    token: String,
+) -> Result<(), String> {
+    let mut cfg = read_config(&state);
+    let trimmed = token.trim();
+    let next = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    if cfg.ngrok_authtoken != next {
+        let _ = tunnels.reset();
+        cfg.ngrok_authtoken = next;
+    }
+    write_config(&state, &cfg);
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_share_tunnel(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    id: String,
+) -> Result<String, String> {
+    let _share = state
+        .shares
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "分享不存在".to_string())?;
+    let port = *state.port.lock().unwrap();
+    let token = read_config(&state).ngrok_authtoken;
+    let root = tunnels.start(
+        format!("share:{id}"),
+        format!("http://127.0.0.1:{port}"),
+        token,
+    )?;
+    Ok(format!("{root}/s/{id}"))
+}
+
+#[tauri::command]
+async fn stop_share_tunnel(tunnels: State<'_, TunnelManager>, id: String) -> Result<(), String> {
+    tunnels.stop(format!("share:{id}"))
+}
+
+#[tauri::command]
+async fn start_site_tunnel(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    id: String,
+) -> Result<String, String> {
+    let site = state
+        .sites
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "站点不存在".to_string())?;
+    if site.port == 0 {
+        return Err("站点未启动".to_string());
+    }
+    let token = read_config(&state).ngrok_authtoken;
+    tunnels.start(
+        format!("site:{id}"),
+        format!("http://127.0.0.1:{}", site.port),
+        token,
+    )
+}
+
+#[tauri::command]
+async fn stop_site_tunnel(tunnels: State<'_, TunnelManager>, id: String) -> Result<(), String> {
+    tunnels.stop(format!("site:{id}"))
 }
 
 #[tauri::command]
@@ -725,6 +837,7 @@ pub fn run() {
             app.manage(app_state);
             app.manage(ServerHandle::default());
             app.manage(SiteServerHandle::default());
+            app.manage(TunnelManager::new());
 
             let handle = app.state::<ServerHandle>();
             let site_handles = app.state::<SiteServerHandle>();
@@ -815,6 +928,11 @@ pub fn run() {
             clear_sites,
             set_share_port,
             set_site_port,
+            set_ngrok_authtoken,
+            start_share_tunnel,
+            stop_share_tunnel,
+            start_site_tunnel,
+            stop_site_tunnel,
             open_path,
             clear_history,
             remove_history_record,

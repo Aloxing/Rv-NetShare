@@ -31,6 +31,7 @@ type ReactiveState = {
   shares: ShareSession[];
   sites: SiteSession[];
   history: AccessRecord[];
+  ngrokUrls: Record<string, string>;
   toasts: Toast[];
   fontSize: number;
   theme: ThemeMode;
@@ -60,6 +61,7 @@ const state = reactive<ReactiveState>({
   shares: [],
   sites: [],
   history: [],
+  ngrokUrls: {},
   toasts: [],
   fontSize: loadFontSize(),
   theme: loadThemeMode(),
@@ -113,6 +115,7 @@ export async function initAppState() {
     s.shares = initial.shares;
     s.sites = initial.sites;
     s.history = initial.history;
+    s.ngrokUrls = {};
     s.ready = true;
   });
 
@@ -172,12 +175,20 @@ export async function createShare(path: string) {
 
 export async function removeShare(id: string) {
   await invoke<void>('remove_share', { id });
-  mutate((s) => { s.shares = s.shares.filter((x) => x.id !== id); });
+  mutate((s) => {
+    s.shares = s.shares.filter((x) => x.id !== id);
+    delete s.ngrokUrls['share:' + id];
+  });
 }
 
 export async function clearShares() {
   await invoke<void>('clear_shares');
-  mutate((s) => { s.shares = []; });
+  mutate((s) => {
+    s.shares = [];
+    for (const key of Object.keys(s.ngrokUrls)) {
+      if (key.startsWith('share:')) delete s.ngrokUrls[key];
+    }
+  });
   pushToast('info', '已停止全部分享');
 }
 
@@ -198,12 +209,20 @@ export async function createSite(path: string) {
 
 export async function removeSite(id: string) {
   await invoke<void>('remove_site', { id });
-  mutate((s) => { s.sites = s.sites.filter((x) => x.id !== id); });
+  mutate((s) => {
+    s.sites = s.sites.filter((x) => x.id !== id);
+    delete s.ngrokUrls['site:' + id];
+  });
 }
 
 export async function clearSites() {
   await invoke<void>('clear_sites');
-  mutate((s) => { s.sites = []; });
+  mutate((s) => {
+    s.sites = [];
+    for (const key of Object.keys(s.ngrokUrls)) {
+      if (key.startsWith('site:')) delete s.ngrokUrls[key];
+    }
+  });
   pushToast('info', '已移除全部站点');
 }
 
@@ -238,6 +257,9 @@ export async function setSaveDir(path: string): Promise<string> {
 export async function setSharePort(port: number): Promise<number> {
   const bound = await invoke<number>('set_share_port', { port });
   mutate((s) => {
+    for (const key of Object.keys(s.ngrokUrls)) {
+      if (key.startsWith('share:')) delete s.ngrokUrls[key];
+    }
     if (s.initial) {
       s.initial = { ...s.initial, port: bound, share_port: port };
     }
@@ -249,11 +271,48 @@ export async function setSitePort(port: number): Promise<number> {
   const bound = await invoke<number>('set_site_port', { port });
   await refreshSites();
   mutate((s) => {
+    for (const key of Object.keys(s.ngrokUrls)) {
+      if (key.startsWith('site:')) delete s.ngrokUrls[key];
+    }
     if (s.initial) {
       s.initial = { ...s.initial, site_port: port };
     }
   });
   return bound;
+}
+
+export async function setNgrokAuthtoken(token: string): Promise<void> {
+  const before = state.initial?.ngrok_authtoken ?? null;
+  const next = token.trim() || null;
+  await invoke<void>('set_ngrok_authtoken', { token });
+  mutate((s) => {
+    if (before !== next) s.ngrokUrls = {};
+    if (s.initial) {
+      s.initial = { ...s.initial, ngrok_authtoken: next };
+    }
+  });
+}
+
+export async function startShareTunnel(id: string): Promise<string> {
+  const url = await invoke<string>('start_share_tunnel', { id });
+  mutate((s) => { s.ngrokUrls['share:' + id] = url; });
+  return url;
+}
+
+export async function stopShareTunnel(id: string): Promise<void> {
+  await invoke<void>('stop_share_tunnel', { id });
+  mutate((s) => { delete s.ngrokUrls['share:' + id]; });
+}
+
+export async function startSiteTunnel(id: string): Promise<string> {
+  const url = await invoke<string>('start_site_tunnel', { id });
+  mutate((s) => { s.ngrokUrls['site:' + id] = url; });
+  return url;
+}
+
+export async function stopSiteTunnel(id: string): Promise<void> {
+  await invoke<void>('stop_site_tunnel', { id });
+  mutate((s) => { delete s.ngrokUrls['site:' + id]; });
 }
 
 export function setFontSize(n: number) {
