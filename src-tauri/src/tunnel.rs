@@ -35,7 +35,9 @@ enum TunnelCommand {
     Reset {
         reply: Sender<Result<(), String>>,
     },
-    Shutdown,
+    Shutdown {
+        reply: Sender<()>,
+    },
 }
 
 pub struct TunnelManager {
@@ -97,7 +99,9 @@ impl TunnelManager {
 
 impl Drop for TunnelManager {
     fn drop(&mut self) {
-        let _ = self.sender.send(TunnelCommand::Shutdown);
+        let (reply_tx, reply_rx) = channel();
+        let _ = self.sender.send(TunnelCommand::Shutdown { reply: reply_tx });
+        let _ = reply_rx.recv_timeout(Duration::from_secs(10));
         self.worker.take();
     }
 }
@@ -132,7 +136,7 @@ fn run_worker(receiver: Receiver<TunnelCommand>) {
                 let _ = reply.send(result);
             }
             TunnelCommand::Stop { key, reply } => {
-                let result = runtime.block_on(stop_tunnel(&mut tunnels, key));
+                let result = runtime.block_on(stop_tunnel(&mut session, &mut tunnels, key));
                 let _ = reply.send(result);
             }
             TunnelCommand::Reset { reply } => {
@@ -145,13 +149,14 @@ fn run_worker(receiver: Receiver<TunnelCommand>) {
                 });
                 let _ = reply.send(result);
             }
-            TunnelCommand::Shutdown => {
+            TunnelCommand::Shutdown { reply } => {
                 runtime.block_on(async {
                     close_all(&mut tunnels).await;
                     if let Some((_, mut sess)) = session.take() {
                         let _ = sess.close().await;
                     }
                 });
+                let _ = reply.send(());
                 break;
             }
         }
@@ -217,16 +222,24 @@ async fn start_tunnel(
 }
 
 async fn stop_tunnel(
+    session_slot: &mut Option<(String, Session)>,
     tunnels: &mut HashMap<String, Forwarder<HttpTunnel>>,
     key: String,
 ) -> Result<(), String> {
-    if let Some(mut forwarder) = tunnels.remove(&key) {
+    let close_result = if let Some(mut forwarder) = tunnels.remove(&key) {
         forwarder
             .close()
             .await
-            .map_err(|e| format!("关闭隧道失败: {e}"))?;
+            .map_err(|e| format!("关闭隧道失败: {e}"))
+    } else {
+        Ok(())
+    };
+    if tunnels.is_empty() {
+        if let Some((_, mut sess)) = session_slot.take() {
+            let _ = sess.close().await;
+        }
     }
-    Ok(())
+    close_result
 }
 
 async fn close_all(tunnels: &mut HashMap<String, Forwarder<HttpTunnel>>) {
