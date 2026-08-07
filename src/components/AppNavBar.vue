@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { Moon, Sun } from '@lucide/vue';
 import type { Tab } from '../types';
-import { useAppState } from '../composables/useAppState';
+import { setThemeMode, useAppState } from '../composables/useAppState';
 
 const props = defineProps<{ active: Tab }>();
 const emit = defineEmits<{ (e: 'change', tab: Tab): void }>();
@@ -20,6 +21,16 @@ const navRef = ref<HTMLElement | null>(null);
 const itemRefs = ref<(HTMLElement | null)[]>([]);
 const indicator = reactive({ left: 0, width: 0 });
 let resizeObserver: ResizeObserver | null = null;
+let onSystemTheme: (() => void) | null = null;
+const darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
+const systemDark = ref(darkMedia.matches);
+const isDark = computed(
+  () => state.theme === 'dark' || (state.theme === 'system' && systemDark.value),
+);
+
+function toggleTheme() {
+  setThemeMode(isDark.value ? 'light' : 'dark');
+}
 
 const indicatorStyle = computed(() => ({
   left: indicator.left + 'px',
@@ -47,6 +58,8 @@ onMounted(() => {
   void updateIndicator();
   resizeObserver = new ResizeObserver(() => void updateIndicator());
   if (navRef.value) resizeObserver.observe(navRef.value);
+  onSystemTheme = () => { systemDark.value = darkMedia.matches; };
+  darkMedia.addEventListener('change', onSystemTheme);
 });
 
 watch(() => props.active, () => { void updateIndicator(); });
@@ -54,12 +67,14 @@ watch(() => props.active, () => { void updateIndicator(); });
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   resizeObserver = null;
+  if (onSystemTheme) darkMedia.removeEventListener('change', onSystemTheme);
+  onSystemTheme = null;
 });
 </script>
 
 <template>
-  <nav class="flex h-12 shrink-0 items-center border-b border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] px-5">
-    <div ref="navRef" class="relative flex h-10 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-panel)] p-1 shadow-[inset_0_1px_2px_rgb(0_0_0/0.06)]">
+  <nav class="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] px-5">
+    <div ref="navRef" class="relative flex h-10 items-center rounded-full bg-[var(--color-bg-panel)] p-1 shadow-[inset_0_1px_2px_rgb(0_0_0/0.06)]">
       <div
         class="pointer-events-none absolute bottom-1 top-1 rounded-full bg-[var(--color-accent)] shadow-[var(--shadow-card)] transition-all duration-300 ease-out"
         :style="indicatorStyle"
@@ -86,5 +101,13 @@ onBeforeUnmount(() => {
         </span>
       </button>
     </div>
+    <button
+      class="flex h-10 w-10 items-center justify-center rounded-full text-[var(--color-text-muted)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)] active:scale-95"
+      :title="isDark ? '切换浅色主题' : '切换深色主题'"
+      @click="toggleTheme"
+    >
+      <Sun v-if="!isDark" :size="16" />
+      <Moon v-else :size="16" />
+    </button>
   </nav>
 </template>

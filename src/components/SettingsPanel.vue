@@ -444,7 +444,7 @@ async function onRefreshIp() {
             <div class="flex min-h-0 flex-1 flex-col gap-1.5">
               <div class="flex items-center justify-between gap-3 rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
                 <span class="text-[var(--color-text-muted)]">版本</span>
-                <span class="truncate font-mono text-[var(--color-text)]">v0.2.0</span>
+                <span class="truncate font-mono text-[var(--color-text)]">v1.1.0</span>
               </div>
               <div class="flex items-center justify-between gap-3 rounded-lg bg-[var(--color-bg-panel)] px-3 py-2 text-[12px]">
                 <span class="shrink-0 text-[var(--color-text-muted)]">本地数据</span>
