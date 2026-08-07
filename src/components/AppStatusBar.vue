@@ -3,7 +3,7 @@ import { Clock3, FolderOpen } from '@lucide/vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAppState } from '../composables/useAppState';
 
-const props = defineProps<{ shares: number; sites: number; history: number; }>();
+const props = defineProps<{ shares: number; sites: number; receives: number; history: number; }>();
 const state = useAppState();
 
 const clock = ref(new Date());
@@ -28,6 +28,7 @@ const time = computed(() => {
     <div class="flex items-center gap-4">
       <span class="flex items-center gap-1.5"><FolderOpen :size="13" />{{ props.shares }} 个分享</span>
       <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-[var(--color-icon-accent)]"></span>{{ props.sites }} 个站点</span>
+      <span class="flex items-center gap-1.5"><FolderOpen :size="13" />{{ props.receives }} 个接收</span>
       <span class="flex items-center gap-1.5"><Clock3 :size="13" />{{ props.history }} 条记录</span>
     </div>
     <div class="flex items-center gap-4">

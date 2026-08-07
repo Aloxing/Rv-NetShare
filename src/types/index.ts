@@ -17,6 +17,19 @@ export interface SiteSession extends ShareSession {
   port: number;
 }
 
+export type ReceiveEncryption = 'none' | 'common' | 'custom';
+
+export interface ReceiveSession {
+  id: string;
+  name: string;
+  extensions: readonly string[];
+  encryption: ReceiveEncryption;
+  custom_password: string | null;
+  created_at: number;
+  received_count: number;
+  received_bytes: number;
+}
+
 export interface AccessRecord {
   id: string;
   share_id: string;
@@ -27,6 +40,7 @@ export interface AccessRecord {
   peer: string;
   user_agent: string | null;
   status: string;
+  kind: string;
 }
 
 export interface InitialState {
@@ -36,13 +50,16 @@ export interface InitialState {
   save_dir: string;
   shares: ShareSession[];
   sites: SiteSession[];
+  receivers: ReceiveSession[];
+  receive_dir: string;
   share_port: number | null;
   site_port: number | null;
   ngrok_authtoken: string | null;
+  receive_common_password: string | null;
   history: AccessRecord[];
 }
 
-export type Tab = 'shares' | 'sites' | 'history' | 'settings';
+export type Tab = 'shares' | 'sites' | 'receive' | 'history' | 'settings';
 
 // Result of Tauri's drag-drop event when enabled. On Linux/Windows the
 // dropped File objects expose a path property pointing at the real path.

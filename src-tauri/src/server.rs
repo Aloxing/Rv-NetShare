@@ -27,10 +27,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::html;
-use crate::state::{ShareKind, ShareSession, SiteSession};
+use crate::state::{ReceiveEncryption, ReceiveSession, ShareKind, ShareSession, SiteSession};
 use crate::storage;
 
 // 4 MiB per read. Combined with a matching SO_SNDBUF this means large file
@@ -48,10 +48,7 @@ pub struct ServerStatus {
     pub join: Option<thread::JoinHandle<()>>,
 }
 
-pub fn start_server(
-    app: AppHandle,
-    port: u16,
-) -> Result<ServerStatus, String> {
+pub fn start_server(app: AppHandle, port: u16) -> Result<ServerStatus, String> {
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| e.to_string())?;
     let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
 
@@ -177,14 +174,26 @@ fn handle_site_connection(
         .find(|(k, _)| k.eq_ignore_ascii_case("range"))
         .map(|(_, v)| v.clone());
 
-    let response = route_site_root(&method, &target, site, &peer_ip, user_agent, range.as_deref());
+    let response = route_site_root(
+        &method,
+        &target,
+        site,
+        &peer_ip,
+        user_agent,
+        range.as_deref(),
+    );
 
     match response.body {
         ResponseBody::Full(bytes) => {
             enable_nodelay(&stream);
             let _ = stream.write_all(&bytes);
         }
-        ResponseBody::File { header, mut file, start, length } => {
+        ResponseBody::File {
+            header,
+            mut file,
+            start,
+            length,
+        } => {
             write_file_response(&stream, &header, &mut file, start, length)?;
         }
     }
@@ -217,10 +226,7 @@ fn route_site_root(
     if method != "GET" && method != "HEAD" {
         return error_full(405, "Method Not Allowed", "仅支持 GET / HEAD 请求");
     }
-    let subpath = path
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .to_string();
+    let subpath = path.to_string_lossy().trim_start_matches('/').to_string();
     serve_site(site, &subpath, peer, user_agent, range)
 }
 
@@ -263,7 +269,7 @@ fn configure_socket(stream: &TcpStream) {
 #[cfg(windows)]
 fn configure_socket(stream: &TcpStream) {
     use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{setsockopt, SO_RCVBUF, SO_SNDBUF, SOL_SOCKET};
+    use windows_sys::Win32::Networking::WinSock::{setsockopt, SOL_SOCKET, SO_RCVBUF, SO_SNDBUF};
 
     let socket = stream.as_raw_socket() as usize;
     let send: i32 = SEND_BUFFER;
@@ -317,24 +323,36 @@ fn handle_connection(mut stream: TcpStream, app: &AppHandle) -> io::Result<()> {
     let state = app.state::<crate::state::AppState>();
     let shares: Vec<ShareSession> = state.shares.lock().unwrap().values().cloned().collect();
     let sites: Vec<SiteSession> = state.sites.lock().unwrap().values().cloned().collect();
+    let receivers: Vec<ReceiveSession> =
+        state.receivers.lock().unwrap().values().cloned().collect();
 
-    let response = route(
-        &method,
-        &target,
-        &shares,
-        &sites,
-        &peer_ip,
-        user_agent,
-        range.as_deref(),
-        app,
-    );
+    let response = if method == "POST" {
+        handle_receive_upload(&mut reader, &target, &headers, &receivers, &peer_ip, app)
+    } else {
+        route(
+            &method,
+            &target,
+            &shares,
+            &sites,
+            &receivers,
+            &peer_ip,
+            user_agent,
+            range.as_deref(),
+            app,
+        )
+    };
 
     match response.body {
         ResponseBody::Full(bytes) => {
             enable_nodelay(&stream);
             let _ = stream.write_all(&bytes);
         }
-        ResponseBody::File { header, mut file, start, length } => {
+        ResponseBody::File {
+            header,
+            mut file,
+            start,
+            length,
+        } => {
             write_file_response(&stream, &header, &mut file, start, length)?;
         }
     }
@@ -348,6 +366,204 @@ fn handle_connection(mut stream: TcpStream, app: &AppHandle) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+fn json_full(code: u16, ok: bool, message: &str) -> Outgoing {
+    let payload = serde_json::json!({ "ok": ok, "message": message }).to_string();
+    let reason = match code {
+        200 => "OK",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        411 => "Length Required",
+        415 => "Unsupported Media Type",
+        500 => "Internal Server Error",
+        _ => "Error",
+    };
+    let header = format!(
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {len}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        code = code,
+        reason = reason,
+        len = payload.len(),
+    );
+    let mut bytes = header.into_bytes();
+    bytes.extend_from_slice(payload.as_bytes());
+    Outgoing {
+        body: ResponseBody::Full(bytes),
+        event: None,
+    }
+}
+
+fn receiver_password_matches(
+    receiver: &ReceiveSession,
+    provided: &str,
+    state: &crate::state::AppState,
+) -> bool {
+    match receiver.encryption {
+        ReceiveEncryption::None => true,
+        ReceiveEncryption::Common => {
+            crate::receive_common_password(state).as_deref() == Some(provided)
+        }
+        ReceiveEncryption::Custom => receiver.custom_password.as_deref() == Some(provided),
+    }
+}
+
+fn receiver_allows_extension(receiver: &ReceiveSession, filename: &str) -> bool {
+    if receiver.extensions.iter().any(|ext| ext == "*") {
+        return true;
+    }
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    receiver.extensions.iter().any(|allowed| *allowed == ext)
+}
+
+fn unique_receive_path(dir: &Path, filename: &str) -> PathBuf {
+    let candidate = dir.join(filename);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let path = Path::new(filename);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let mut index = 1;
+    loop {
+        let name = if ext.is_empty() {
+            format!("{stem} ({index})")
+        } else {
+            format!("{stem} ({index}).{ext}")
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        index += 1;
+    }
+}
+
+fn handle_receive_upload<R: BufRead>(
+    reader: &mut R,
+    target: &str,
+    headers: &[(String, String)],
+    receivers: &[ReceiveSession],
+    peer: &str,
+    app: &AppHandle,
+) -> Outgoing {
+    let target = target.split('?').next().unwrap_or(target);
+    let trimmed = target.trim_start_matches('/');
+    let mut segments = trimmed.splitn(3, '/');
+    if segments.next() != Some("r") {
+        return json_full(404, false, "上传地址无效");
+    }
+    let id = match segments.next() {
+        Some(id) if !id.is_empty() => id,
+        _ => return json_full(400, false, "缺少接收卡片 ID"),
+    };
+    if segments.next().unwrap_or("") != "upload" {
+        return json_full(404, false, "上传地址无效");
+    }
+
+    let receiver = match receivers.iter().find(|r| r.id == id) {
+        Some(r) => r.clone(),
+        None => return json_full(404, false, "接收卡片不存在或已删除"),
+    };
+
+    let state = app.state::<crate::state::AppState>();
+    let provided_password = header_value(headers, "x-upload-password").unwrap_or("");
+    if !receiver_password_matches(&receiver, provided_password, &state) {
+        return json_full(403, false, "密码错误");
+    }
+    let user_agent = header_value(headers, "user-agent").map(|s| s.to_string());
+
+    let raw_name = header_value(headers, "x-file-name").unwrap_or("upload.bin");
+    let decoded = percent_decode(raw_name).unwrap_or_else(|_| PathBuf::from("upload.bin"));
+    let filename = decoded
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("upload.bin")
+        .to_string();
+    if !receiver_allows_extension(&receiver, &filename) {
+        return json_full(415, false, &format!("不允许上传此文件类型: {filename}"));
+    }
+
+    let content_length: u64 =
+        match header_value(headers, "content-length").and_then(|value| value.trim().parse().ok()) {
+            Some(n) => n,
+            None => return json_full(411, false, "缺少 Content-Length"),
+        };
+    if content_length == 0 {
+        return json_full(400, false, "文件内容为空");
+    }
+
+    let dir = crate::receive_root_dir(&state).join(&receiver.id);
+    if let Err(e) = fs::create_dir_all(&dir) {
+        return json_full(500, false, &format!("接收目录创建失败: {e}"));
+    }
+    let path = unique_receive_path(&dir, &filename);
+    let mut file = match File::create(&path) {
+        Ok(f) => f,
+        Err(e) => return json_full(500, false, &format!("文件创建失败: {e}")),
+    };
+    let mut limited = (&mut *reader).take(content_length);
+    if let Err(e) = io::copy(&mut limited, &mut file) {
+        return json_full(500, false, &format!("写入文件失败: {e}"));
+    }
+    drop(file);
+
+    let record = storage::AccessRecord {
+        id: format!(
+            "recv-{}-{}-{}",
+            storage::now_secs(),
+            content_length,
+            receiver.id
+        ),
+        share_id: receiver.id.clone(),
+        share_name: filename.clone(),
+        path: path.to_string_lossy().into_owned(),
+        bytes: content_length,
+        timestamp: storage::now_secs(),
+        peer: peer.to_string(),
+        user_agent,
+        status: "success".to_string(),
+        kind: "receive".to_string(),
+    };
+    if let Ok(dir) = storage::ensure_data_dir(&state) {
+        let _ = storage::append_history(&dir, &record);
+        storage::emit_access_event(app, &record);
+    }
+
+    let updated = {
+        let mut receivers = state.receivers.lock().unwrap();
+        if let Some(receiver) = receivers.get_mut(&receiver.id) {
+            receiver.received_count += 1;
+            receiver.received_bytes += content_length;
+        }
+        let dir = state.base_dir.lock().unwrap().clone();
+        let snapshot: Vec<ReceiveSession> = receivers.values().cloned().collect();
+        let _ = storage::write_receivers(&dir, &snapshot);
+        receivers.get(&receiver.id).cloned()
+    };
+    if let Some(updated) = updated {
+        let _ = app.emit(
+            "receiver-updated",
+            &serde_json::json!({ "receiver": updated, "filename": filename }),
+        );
+    }
+
+    json_full(200, true, &format!("{filename} 已保存"))
 }
 
 #[cfg(unix)]
@@ -458,6 +674,7 @@ fn route(
     target: &str,
     shares: &[ShareSession],
     sites: &[SiteSession],
+    receivers: &[ReceiveSession],
     peer: &str,
     user_agent: Option<String>,
     range: Option<&str>,
@@ -474,7 +691,7 @@ fn route(
     }
 
     if path.as_os_str() == "/" || path.as_os_str().is_empty() {
-        let body = html::render_index(shares);
+        let body = html::render_index(shares, receivers);
         return html_full(200, &body);
     }
 
@@ -507,6 +724,21 @@ fn route(
             };
             serve_site(&site, subpath, peer, user_agent, range)
         }
+        "r" => {
+            if id.is_empty() {
+                return error_full(400, "Bad Request", "缺少接收卡片 ID");
+            }
+            let receiver = match receivers.iter().find(|r| r.id == id) {
+                Some(r) => r.clone(),
+                None => return error_full(404, "Not Found", "接收卡片不存在或已删除"),
+            };
+            if !subpath.is_empty() {
+                return error_full(404, "Not Found", "页面不存在");
+            }
+            let password_required = receiver.encryption != ReceiveEncryption::None;
+            let body = html::render_receive_page(&receiver, password_required);
+            html_full(200, &body)
+        }
         _ => error_full(404, "Not Found", "页面不存在"),
     }
 }
@@ -528,7 +760,15 @@ fn serve_share(
             if !subpath.is_empty() {
                 return error_full(404, "Not Found", "文件分享不支持子路径");
             }
-            serve_file_stream(&root, peer, &share.id, &share.name, user_agent, range)
+            serve_file_stream(
+                &root,
+                peer,
+                &share.id,
+                &share.name,
+                user_agent,
+                range,
+                "share",
+            )
         }
         ShareKind::Folder => {
             let target = if subpath.is_empty() {
@@ -555,7 +795,9 @@ fn serve_share(
                     .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or("file");
-                serve_file_stream(&target, peer, &share.id, display, user_agent, range)
+                serve_file_stream(
+                    &target, peer, &share.id, display, user_agent, range, "share",
+                )
             } else {
                 error_full(404, "Not Found", "不支持的资源类型")
             }
@@ -598,7 +840,16 @@ fn serve_site(
     };
     if meta.is_dir() {
         if let Some(index) = find_index_file(&target) {
-            return serve_static_file_stream(&index, peer, &site.id, "index.html", user_agent, range, true);
+            return serve_static_file_stream(
+                &index,
+                peer,
+                &site.id,
+                "index.html",
+                user_agent,
+                range,
+                true,
+                "site",
+            );
         }
         return error_full(404, "Not Found", "未找到 index.html");
     }
@@ -607,7 +858,9 @@ fn serve_site(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("file");
-        return serve_static_file_stream(&target, peer, &site.id, display, user_agent, range, false);
+        return serve_static_file_stream(
+            &target, peer, &site.id, display, user_agent, range, false, "site",
+        );
     }
     error_full(404, "Not Found", "不支持的资源类型")
 }
@@ -635,8 +888,11 @@ fn serve_file_stream(
     display: &str,
     user_agent: Option<String>,
     range: Option<&str>,
+    kind: &str,
 ) -> Outgoing {
-    serve_file_response(path, peer, share_id, display, user_agent, range, true, true)
+    serve_file_response(
+        path, peer, share_id, display, user_agent, range, true, true, kind,
+    )
 }
 
 fn serve_static_file_stream(
@@ -647,8 +903,11 @@ fn serve_static_file_stream(
     user_agent: Option<String>,
     range: Option<&str>,
     record: bool,
+    kind: &str,
 ) -> Outgoing {
-    serve_file_response(path, peer, share_id, display, user_agent, range, false, record)
+    serve_file_response(
+        path, peer, share_id, display, user_agent, range, false, record, kind,
+    )
 }
 
 fn serve_file_response(
@@ -660,6 +919,7 @@ fn serve_file_response(
     range: Option<&str>,
     attachment: bool,
     record: bool,
+    kind: &str,
 ) -> Outgoing {
     let meta = match fs::metadata(path) {
         Ok(m) => m,
@@ -687,7 +947,15 @@ fn serve_file_response(
             let end = range_end.unwrap_or(len - 1);
             let range_length = end - range_start + 1;
             (
-                build_partial_header(mime, range_length, display, range_start, end, len, attachment),
+                build_partial_header(
+                    mime,
+                    range_length,
+                    display,
+                    range_start,
+                    end,
+                    len,
+                    attachment,
+                ),
                 range_start,
                 range_length,
             )
@@ -708,12 +976,18 @@ fn serve_file_response(
             peer: peer.to_string(),
             user_agent,
             status: "success".to_string(),
+            kind: kind.to_string(),
         })
     } else {
         None
     };
     Outgoing {
-        body: ResponseBody::File { header, file, start, length },
+        body: ResponseBody::File {
+            header,
+            file,
+            start,
+            length,
+        },
         event,
     }
 }
@@ -837,7 +1111,12 @@ fn write_file_response(
     }
 }
 
-fn write_range_chunks(mut stream: &TcpStream, file: &mut File, start: u64, length: u64) -> io::Result<()> {
+fn write_range_chunks(
+    mut stream: &TcpStream,
+    file: &mut File,
+    start: u64,
+    length: u64,
+) -> io::Result<()> {
     use std::io::{Seek, SeekFrom};
 
     file.seek(SeekFrom::Start(start))?;
@@ -895,7 +1174,10 @@ fn hex_val(c: u8) -> io::Result<u8> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidData, "bad percent encoding")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad percent encoding",
+        )),
     }
 }
 
@@ -955,7 +1237,10 @@ fn html_full(code: u16, body: &str) -> Outgoing {
     );
     let mut bytes = header.into_bytes();
     bytes.extend_from_slice(body.as_bytes());
-    Outgoing { body: ResponseBody::Full(bytes), event: None }
+    Outgoing {
+        body: ResponseBody::Full(bytes),
+        event: None,
+    }
 }
 
 fn error_full(code: u16, reason: &str, msg: &str) -> Outgoing {
@@ -966,7 +1251,10 @@ fn error_full(code: u16, reason: &str, msg: &str) -> Outgoing {
     );
     let mut bytes = header.into_bytes();
     bytes.extend_from_slice(body.as_bytes());
-    Outgoing { body: ResponseBody::Full(bytes), event: None }
+    Outgoing {
+        body: ResponseBody::Full(bytes),
+        event: None,
+    }
 }
 
 fn read_request_line<R: BufRead>(reader: &mut R) -> io::Result<String> {
@@ -1001,14 +1289,10 @@ fn parse_request_line(line: &str) -> (String, String) {
     (method, target)
 }
 
-
 /// Bench-friendly entry point: starts the server with a fixed share list,
 /// skipping the Tauri AppHandle. Used by examples/bench.rs to measure
 /// throughput without spinning up a Tauri webview.
-pub fn start_server_with_shares<I>(
-    port: u16,
-    shares: I,
-) -> io::Result<u16>
+pub fn start_server_with_shares<I>(port: u16, shares: I) -> io::Result<u16>
 where
     I: IntoIterator<Item = ShareSession>,
 {
@@ -1034,7 +1318,10 @@ where
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
                             let _ = stream.set_write_timeout(Some(Duration::from_secs(120)));
                             configure_socket(&stream);
-                            let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                            let peer = stream
+                                .peer_addr()
+                                .map(|a| a.ip().to_string())
+                                .unwrap_or_default();
                             let response = match parse_and_route(&stream, &shares, &[], &peer) {
                                 Ok(r) => r,
                                 Err(_) => return,
@@ -1045,8 +1332,15 @@ where
                                     enable_nodelay(&stream);
                                     let _ = stream.write_all(&bytes);
                                 }
-                                ResponseBody::File { header, mut file, start, length } => {
-                                    let _ = write_file_response(&stream, &header, &mut file, start, length);
+                                ResponseBody::File {
+                                    header,
+                                    mut file,
+                                    start,
+                                    length,
+                                } => {
+                                    let _ = write_file_response(
+                                        &stream, &header, &mut file, start, length,
+                                    );
                                 }
                             }
                             let _ = stream.flush();
@@ -1086,6 +1380,7 @@ fn parse_and_route(
         &target,
         shares,
         sites,
+        &[],
         peer,
         user_agent,
         range.as_deref(),
@@ -1097,6 +1392,7 @@ fn route_no_app(
     target: &str,
     shares: &[ShareSession],
     sites: &[SiteSession],
+    receivers: &[ReceiveSession],
     peer: &str,
     user_agent: Option<String>,
     range: Option<&str>,
@@ -1112,7 +1408,7 @@ fn route_no_app(
     }
 
     if path.as_os_str() == "/" || path.as_os_str().is_empty() {
-        let body = html::render_index(shares);
+        let body = html::render_index(shares, receivers);
         return html_full(200, &body);
     }
 
@@ -1145,6 +1441,21 @@ fn route_no_app(
             };
             serve_site(&site, subpath, peer, user_agent, range)
         }
+        "r" => {
+            if id.is_empty() {
+                return error_full(400, "Bad Request", "缺少接收卡片 ID");
+            }
+            let receiver = match receivers.iter().find(|r| r.id == id) {
+                Some(r) => r.clone(),
+                None => return error_full(404, "Not Found", "接收卡片不存在或已删除"),
+            };
+            if !subpath.is_empty() {
+                return error_full(404, "Not Found", "页面不存在");
+            }
+            let password_required = receiver.encryption != ReceiveEncryption::None;
+            let body = html::render_receive_page(&receiver, password_required);
+            html_full(200, &body)
+        }
         _ => error_full(404, "Not Found", "页面不存在"),
     }
 }
@@ -1165,7 +1476,15 @@ fn serve_share_no_app(
             if !subpath.is_empty() {
                 return error_full(404, "Not Found", "文件分享不支持子路径");
             }
-            serve_file_stream(&root, peer, &share.id, &share.name, user_agent, range)
+            serve_file_stream(
+                &root,
+                peer,
+                &share.id,
+                &share.name,
+                user_agent,
+                range,
+                "share",
+            )
         }
         ShareKind::Folder => {
             let target = if subpath.is_empty() {
@@ -1192,7 +1511,9 @@ fn serve_share_no_app(
                     .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or("file");
-                serve_file_stream(&target, peer, &share.id, display, user_agent, range)
+                serve_file_stream(
+                    &target, peer, &share.id, display, user_agent, range, "share",
+                )
             } else {
                 error_full(404, "Not Found", "不支持的资源类型")
             }
@@ -1254,6 +1575,7 @@ mod tests {
             target,
             std::slice::from_ref(share),
             &[],
+            &[],
             "127.0.0.1",
             None,
             None,
@@ -1266,6 +1588,37 @@ mod tests {
             target,
             &[],
             std::slice::from_ref(site),
+            &[],
+            "127.0.0.1",
+            None,
+            None,
+        )
+    }
+
+    fn receive_session(
+        id: &str,
+        extensions: &[&str],
+        encryption: ReceiveEncryption,
+    ) -> ReceiveSession {
+        ReceiveSession {
+            id: id.to_string(),
+            name: "测试接收".to_string(),
+            extensions: extensions.iter().map(|s| s.to_string()).collect(),
+            encryption,
+            custom_password: None,
+            created_at: 1,
+            received_count: 0,
+            received_bytes: 0,
+        }
+    }
+
+    fn request_receive(target: &str, receiver: &ReceiveSession) -> Outgoing {
+        route_no_app(
+            "GET",
+            target,
+            &[],
+            &[],
+            std::slice::from_ref(receiver),
             "127.0.0.1",
             None,
             None,
@@ -1373,14 +1726,7 @@ mod tests {
         assert!(index_header.contains("Content-Type: text/html; charset=utf-8"));
         assert!(!index_header.contains("Content-Disposition"));
 
-        let asset = route_site_root(
-            "GET",
-            "/assets/app.js",
-            &site,
-            "127.0.0.1",
-            None,
-            None,
-        );
+        let asset = route_site_root("GET", "/assets/app.js", &site, "127.0.0.1", None, None);
         let asset_header = header_of(&asset);
         assert!(asset_header.contains("Content-Type: application/javascript"));
         assert!(!asset_header.contains("Content-Disposition"));
@@ -1410,5 +1756,23 @@ mod tests {
         assert!(header.contains("Content-Disposition: attachment"));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn receive_page_renders_upload_form_and_allowed_types() {
+        let receiver = receive_session("recv1", &["jpg", "jpeg", "png"], ReceiveEncryption::Common);
+
+        let out = request_receive(&format!("/r/{}/", receiver.id), &receiver);
+        match out.body {
+            ResponseBody::Full(bytes) => {
+                let body = String::from_utf8(bytes).unwrap();
+                assert!(body.contains("/r/recv1/upload"));
+                assert!(body.contains(".jpg"));
+                assert!(body.contains("通用加密"));
+                assert!(body.contains("upload-password"));
+                assert!(body.contains("selected-list"));
+            }
+            _ => panic!("expected receive page"),
+        }
     }
 }

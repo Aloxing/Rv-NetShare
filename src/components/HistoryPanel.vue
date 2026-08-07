@@ -8,6 +8,7 @@ import {
   File,
   Folder,
   Globe,
+  Inbox,
   Network,
   Search,
   Trash2,
@@ -21,7 +22,7 @@ import FilterSelect from './FilterSelect.vue';
 
 const state = useAppState();
 
-type RecordKind = 'file' | 'folder' | 'site' | 'unknown';
+type RecordKind = 'file' | 'folder' | 'site' | 'receive' | 'unknown';
 type GroupMode = 'peer' | 'resource' | 'date';
 
 const keyword = ref('');
@@ -35,6 +36,7 @@ const kindOptions = [
   { value: 'file' as const, label: '文件' },
   { value: 'folder' as const, label: '文件夹' },
   { value: 'site' as const, label: '站点' },
+  { value: 'receive' as const, label: '接收' },
   { value: 'unknown' as const, label: '其他' },
 ];
 const statusOptions = [
@@ -55,6 +57,8 @@ const groupOptions = [
 ];
 
 function recordKind(item: AccessRecord): RecordKind {
+  if (item.kind === 'receive') return 'receive';
+  if (item.kind === 'site') return 'site';
   if (state.sites.some((site) => site.id === item.share_id)) return 'site';
   const share = state.shares.find((share) => share.id === item.share_id);
   return share?.kind ?? 'unknown';
@@ -69,13 +73,14 @@ function resourceLabel(item: AccessRecord) {
 }
 
 function kindLabel(kind: RecordKind) {
-  return { file: '文件', folder: '文件夹', site: '站点', unknown: '其他' }[kind];
+  return { file: '文件', folder: '文件夹', site: '站点', receive: '接收', unknown: '其他' }[kind];
 }
 
 function kindClass(kind: RecordKind) {
   if (kind === 'file') return 'bg-[var(--color-success-soft)] text-[var(--color-success)]';
   if (kind === 'folder') return 'bg-[var(--color-icon-warning-soft)] text-[var(--color-icon-warning)]';
   if (kind === 'site') return 'bg-[var(--color-icon-accent-soft)] text-[var(--color-icon-accent)]';
+  if (kind === 'receive') return 'bg-[var(--color-success-soft)] text-[var(--color-success)]';
   return 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]';
 }
 
@@ -294,6 +299,7 @@ async function onRemove(item: AccessRecord) {
                     <File v-else-if="group.kind === 'file'" :size="13" class="shrink-0 text-[var(--color-success)]" />
                     <Folder v-else-if="group.kind === 'folder'" :size="13" class="shrink-0 text-[var(--color-icon-warning)]" />
                     <Globe v-else-if="group.kind === 'site'" :size="13" class="shrink-0 text-[var(--color-icon-accent)]" />
+                    <Inbox v-else-if="group.kind === 'receive'" :size="13" class="shrink-0 text-[var(--color-success)]" />
                     <CalendarDays v-else-if="groupMode === 'date'" :size="13" class="shrink-0 text-[var(--color-icon-accent)]" />
                     <Network v-else :size="13" class="shrink-0 text-[var(--color-text-subtle)]" />
                     <span class="truncate font-mono text-[11.5px] font-semibold" :title="group.label">{{ group.label }}</span>

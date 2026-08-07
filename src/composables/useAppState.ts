@@ -1,7 +1,7 @@
 import { reactive, readonly } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { AccessRecord, InitialState, PathCheck, ShareSession, SiteSession } from '../types';
+import type { AccessRecord, InitialState, PathCheck, ReceiveSession, ShareSession, SiteSession } from '../types';
 import { loadThemeMode, setThemeMode as persistThemeMode, type ThemeMode } from '../utils/theme';
 
 // =============================================================================
@@ -24,12 +24,14 @@ export function getDropHandler() {
 
 type ToastKind = 'info' | 'success' | 'error';
 type Toast = { id: number; kind: ToastKind; text: string };
+type ReceiveUpdateEvent = { receiver: ReceiveSession; filename: string };
 
 type ReactiveState = {
   ready: boolean;
   initial: InitialState | null;
   shares: ShareSession[];
   sites: SiteSession[];
+  receivers: ReceiveSession[];
   history: AccessRecord[];
   ngrokUrls: Record<string, string>;
   toasts: Toast[];
@@ -60,6 +62,7 @@ const state = reactive<ReactiveState>({
   initial: null,
   shares: [],
   sites: [],
+  receivers: [],
   history: [],
   ngrokUrls: {},
   toasts: [],
@@ -73,6 +76,7 @@ function mutate(fn: (s: ReactiveState) => void) {
 
 let toastSeq = 1;
 let unlisten: UnlistenFn | null = null;
+let receiverUnlisten: UnlistenFn | null = null;
 let ipRefreshTimer: number | null = null;
 export async function refreshLocalIp(): Promise<string | null> {
   try {
@@ -114,6 +118,7 @@ export async function initAppState() {
     s.initial = initial;
     s.shares = initial.shares;
     s.sites = initial.sites;
+    s.receivers = initial.receivers;
     s.history = initial.history;
     s.ngrokUrls = {};
     s.ready = true;
@@ -121,7 +126,20 @@ export async function initAppState() {
 
   unlisten = await listen<AccessRecord>('share-access', (event) => {
     mutate((s) => { s.history = [event.payload, ...s.history].slice(0, 500); });
-    pushToast('info', event.payload.peer + ' 下载了 ' + event.payload.share_name);
+    if (event.payload.kind === 'receive') {
+      pushToast('success', '收到文件：' + event.payload.share_name);
+    } else {
+      pushToast('info', event.payload.peer + ' 下载了 ' + event.payload.share_name);
+    }
+  });
+
+  receiverUnlisten = await listen<ReceiveUpdateEvent>('receiver-updated', (event) => {
+    const { receiver: updated } = event.payload;
+    mutate((s) => {
+      s.receivers = s.receivers.map((receiver) =>
+        receiver.id === updated.id ? updated : receiver,
+      );
+    });
   });
 
   // Register a one-shot drag-drop listener on the webview. The actual handler
@@ -153,6 +171,10 @@ export function disposeAppState() {
     if (typeof dropUnlisten === 'function') dropUnlisten();
     unlisten();
     unlisten = null;
+  }
+  if (receiverUnlisten) {
+    receiverUnlisten();
+    receiverUnlisten = null;
   }
   stopIpRefresh();
   setDropHandler(null);
@@ -224,6 +246,107 @@ export async function clearSites() {
     }
   });
   pushToast('info', '已移除全部站点');
+}
+
+export async function refreshReceivers() {
+  const list = await invoke<ReceiveSession[]>('list_receivers');
+  mutate((s) => { s.receivers = list; });
+}
+
+export async function createReceiver(
+  name: string,
+  extensions: string[],
+  encryption: 'none' | 'common' | 'custom',
+  customPassword?: string,
+): Promise<ReceiveSession> {
+  const session = await invoke<ReceiveSession>('create_receiver', {
+    name,
+    extensions,
+    encryption,
+    customPassword: customPassword?.trim() || null,
+  });
+  mutate((s) => {
+    if (!s.receivers.some((x) => x.id === session.id)) {
+      s.receivers = [session, ...s.receivers];
+    }
+  });
+  return session;
+}
+
+export async function updateReceiver(
+  id: string,
+  name: string,
+  extensions: string[],
+  encryption: 'none' | 'common' | 'custom',
+  customPassword?: string,
+): Promise<ReceiveSession> {
+  const updated = await invoke<ReceiveSession>('update_receiver', {
+    id,
+    name,
+    extensions,
+    encryption,
+    customPassword: customPassword?.trim() || null,
+  });
+  mutate((s) => {
+    s.receivers = s.receivers.map((receiver) =>
+      receiver.id === updated.id ? updated : receiver,
+    );
+  });
+  return updated;
+}
+
+export async function removeReceiver(id: string) {
+  await invoke<void>('remove_receiver', { id });
+  mutate((s) => {
+    s.receivers = s.receivers.filter((x) => x.id !== id);
+    delete s.ngrokUrls['receive:' + id];
+  });
+}
+
+export async function clearReceivers() {
+  await invoke<void>('clear_receivers');
+  mutate((s) => {
+    s.receivers = [];
+    for (const key of Object.keys(s.ngrokUrls)) {
+      if (key.startsWith('receive:')) delete s.ngrokUrls[key];
+    }
+  });
+  pushToast('info', '已移除全部接收卡片');
+}
+
+export async function setReceiveCommonPassword(password: string) {
+  const next = password.trim() || null;
+  await invoke<void>('set_receive_common_password', { password });
+  mutate((s) => {
+    if (s.initial) {
+      s.initial = { ...s.initial, receive_common_password: next };
+    }
+  });
+}
+
+export async function setReceiveDir(path: string): Promise<string> {
+  const resolved = await invoke<string>('set_receive_dir', { path });
+  mutate((s) => {
+    if (s.initial) {
+      s.initial = { ...s.initial, receive_dir: resolved };
+    }
+  });
+  return resolved;
+}
+
+export async function startReceiveTunnel(id: string): Promise<string> {
+  const url = await invoke<string>('start_receiver_tunnel', { id });
+  mutate((s) => { s.ngrokUrls['receive:' + id] = url; });
+  return url;
+}
+
+export async function stopReceiveTunnel(id: string): Promise<void> {
+  await invoke<void>('stop_receiver_tunnel', { id });
+  mutate((s) => { delete s.ngrokUrls['receive:' + id]; });
+}
+
+export async function openReceiveDir(id: string) {
+  return invoke<void>('open_receive_dir', { id });
 }
 
 export async function openPath(path: string) {
@@ -342,6 +465,10 @@ export function buildShareUrl(localIp: string, port: number, id: string, suffix 
 export function buildSiteUrl(localIp: string, port: number, suffix = '') {
   const base = 'http://' + localIp + ':' + port + '/';
   return suffix ? base + suffix : base;
+}
+
+export function buildReceiveUrl(localIp: string, port: number, id: string) {
+  return 'http://' + localIp + ':' + port + '/r/' + id;
 }
 
 // ============================================================================

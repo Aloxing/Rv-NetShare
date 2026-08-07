@@ -42,6 +42,30 @@ pub struct SiteSession {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReceiveEncryption {
+    None,
+    Common,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiveSession {
+    pub id: String,
+    pub name: String,
+    /// Lowercase extensions without the leading dot; `["*"]` means any file.
+    pub extensions: Vec<String>,
+    pub encryption: ReceiveEncryption,
+    #[serde(default)]
+    pub custom_password: Option<String>,
+    pub created_at: i64,
+    #[serde(default)]
+    pub received_count: u64,
+    #[serde(default)]
+    pub received_bytes: u64,
+}
+
 pub struct AppState {
     /// Stable application data directory holding config.json and shares.json.
     pub base_dir: Mutex<PathBuf>,
@@ -54,6 +78,8 @@ pub struct AppState {
     pub shares: Mutex<HashMap<String, ShareSession>>,
     /// Static website sessions, keyed by their random token.
     pub sites: Mutex<HashMap<String, SiteSession>>,
+    /// File receive cards, keyed by their random token.
+    pub receivers: Mutex<HashMap<String, ReceiveSession>>,
 }
 
 impl AppState {
@@ -64,6 +90,7 @@ impl AppState {
             port: Mutex::new(port),
             shares: Mutex::new(HashMap::new()),
             sites: Mutex::new(HashMap::new()),
+            receivers: Mutex::new(HashMap::new()),
         }
     }
 }

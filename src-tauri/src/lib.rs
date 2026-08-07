@@ -27,10 +27,12 @@ use tauri::{Manager, State};
 
 use crate::net::{get_hostname, get_local_ip};
 use crate::server::{start_server, start_site_server, stop_server, ServerStatus};
-use crate::state::{AppState, ShareKind, ShareSession, SiteSession};
+use crate::state::{
+    AppState, ReceiveEncryption, ReceiveSession, ShareKind, ShareSession, SiteSession,
+};
 use crate::storage::{
-    ensure_data_dir, read_history, read_shares, read_sites, reveal_in_explorer, write_history,
-    write_shares, write_sites, AccessRecord,
+    ensure_data_dir, read_history, read_receivers, read_shares, read_sites, reveal_in_explorer,
+    write_history, write_receivers, write_shares, write_sites, AccessRecord,
 };
 use crate::tunnel::TunnelManager;
 
@@ -48,9 +50,12 @@ struct InitialState {
     save_dir: String,
     shares: Vec<ShareSession>,
     sites: Vec<SiteSession>,
+    receivers: Vec<ReceiveSession>,
+    receive_dir: String,
     share_port: Option<u16>,
     site_port: Option<u16>,
     ngrok_authtoken: Option<String>,
+    receive_common_password: Option<String>,
     history: Vec<AccessRecord>,
 }
 
@@ -60,6 +65,8 @@ struct AppConfig {
     share_port: Option<u16>,
     site_port: Option<u16>,
     ngrok_authtoken: Option<String>,
+    receive_common_password: Option<String>,
+    receive_dir: Option<String>,
 }
 
 const DEFAULT_PORT: u16 = 48721;
@@ -128,12 +135,38 @@ fn write_config(state: &AppState, cfg: &AppConfig) {
 
 fn configured_share_port(state: &AppState) -> u16 {
     let port = read_config(state).share_port.unwrap_or(DEFAULT_PORT);
-    if port == 0 { DEFAULT_PORT } else { port }
+    if port == 0 {
+        DEFAULT_PORT
+    } else {
+        port
+    }
 }
 
 fn configured_site_port(state: &AppState) -> u16 {
     let port = read_config(state).site_port.unwrap_or(DEFAULT_SITE_PORT);
-    if port == 0 { DEFAULT_SITE_PORT } else { port }
+    if port == 0 {
+        DEFAULT_SITE_PORT
+    } else {
+        port
+    }
+}
+
+pub(crate) fn receive_common_password(state: &AppState) -> Option<String> {
+    read_config(state)
+        .receive_common_password
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub(crate) fn receive_root_dir(state: &AppState) -> PathBuf {
+    let cfg = read_config(state);
+    if let Some(custom) = cfg.receive_dir.as_deref() {
+        let path = PathBuf::from(custom);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    state.data_dir.lock().unwrap().clone().join("receive")
 }
 
 fn load_shares(state: &AppState) -> Vec<ShareSession> {
@@ -159,6 +192,20 @@ fn persist_sites(state: &AppState) {
     let sites: Vec<SiteSession> = state.sites.lock().unwrap().values().cloned().collect();
     if let Err(e) = write_sites(&dir, &sites) {
         eprintln!("[site] failed to persist sites: {e}");
+    }
+}
+
+fn load_receivers(state: &AppState) -> Vec<ReceiveSession> {
+    let dir = state.base_dir.lock().unwrap().clone();
+    read_receivers(&dir).unwrap_or_default()
+}
+
+fn persist_receivers(state: &AppState) {
+    let dir = state.base_dir.lock().unwrap().clone();
+    let receivers: Vec<ReceiveSession> =
+        state.receivers.lock().unwrap().values().cloned().collect();
+    if let Err(e) = write_receivers(&dir, &receivers) {
+        eprintln!("[receive] failed to persist receivers: {e}");
     }
 }
 
@@ -211,7 +258,10 @@ fn app_initial_state(state: State<'_, AppState>) -> Result<InitialState, String>
     let save_dir = ensure_data_dir(&state).map_err(|e| e.to_string())?;
     let shares = state.shares.lock().unwrap().values().cloned().collect();
     let sites = state.sites.lock().unwrap().values().cloned().collect();
+    let receivers = state.receivers.lock().unwrap().values().cloned().collect();
     let history = read_history(&save_dir).unwrap_or_default();
+    let receive_dir = receive_root_dir(&state);
+    let _ = std::fs::create_dir_all(&receive_dir);
     let cfg = read_config(&state);
     Ok(InitialState {
         local_ip,
@@ -220,9 +270,12 @@ fn app_initial_state(state: State<'_, AppState>) -> Result<InitialState, String>
         save_dir: save_dir.to_string_lossy().into_owned(),
         shares,
         sites,
+        receivers,
+        receive_dir: receive_dir.to_string_lossy().into_owned(),
         share_port: cfg.share_port,
         site_port: cfg.site_port,
         ngrok_authtoken: cfg.ngrok_authtoken,
+        receive_common_password: cfg.receive_common_password,
         history,
     })
 }
@@ -437,7 +490,11 @@ fn create_site(
         port: 0,
     };
     let status = start_site_with_fallback(&app, &state, &mut session)?;
-    state.sites.lock().unwrap().insert(session.id.clone(), session.clone());
+    state
+        .sites
+        .lock()
+        .unwrap()
+        .insert(session.id.clone(), session.clone());
     handles.0.lock().unwrap().insert(session.id.clone(), status);
     persist_sites(&state);
     Ok(session)
@@ -478,6 +535,236 @@ async fn clear_sites(
 }
 
 #[tauri::command]
+fn list_receivers(state: State<'_, AppState>) -> Vec<ReceiveSession> {
+    state.receivers.lock().unwrap().values().cloned().collect()
+}
+
+fn normalize_receive_extensions(extensions: Vec<String>) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in extensions {
+        let ext = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+        if ext == "*" {
+            return Ok(vec!["*".to_string()]);
+        }
+        if ext.is_empty() {
+            continue;
+        }
+        if ext.len() > 16 {
+            return Err(format!("扩展名过长: {ext}"));
+        }
+        if !out.contains(&ext) {
+            out.push(ext);
+        }
+    }
+    if out.is_empty() {
+        return Err("请至少指定一种文件类型".to_string());
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn create_receiver(
+    state: State<'_, AppState>,
+    name: String,
+    extensions: Vec<String>,
+    encryption: String,
+    custom_password: Option<String>,
+) -> Result<ReceiveSession, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if name.chars().count() > 40 {
+        return Err("名称不能超过 40 个字符".to_string());
+    }
+    let extensions = normalize_receive_extensions(extensions)?;
+    let (mode, saved_password) = match encryption.as_str() {
+        "none" => (ReceiveEncryption::None, None),
+        "common" => {
+            if receive_common_password(&state).is_none() {
+                return Err("请先在设置中配置通用加密密码".to_string());
+            }
+            (ReceiveEncryption::Common, None)
+        }
+        "custom" => {
+            let password = custom_password.unwrap_or_default().trim().to_string();
+            if password.is_empty() {
+                return Err("单独加密必须设置密码".to_string());
+            }
+            (ReceiveEncryption::Custom, Some(password))
+        }
+        _ => return Err("加密方式无效".to_string()),
+    };
+    let session = ReceiveSession {
+        id: random_id(),
+        name,
+        extensions,
+        encryption: mode,
+        custom_password: saved_password,
+        created_at: storage::now_secs(),
+        received_count: 0,
+        received_bytes: 0,
+    };
+    state
+        .receivers
+        .lock()
+        .unwrap()
+        .insert(session.id.clone(), session.clone());
+    persist_receivers(&state);
+    Ok(session)
+}
+
+#[tauri::command]
+fn update_receiver(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    extensions: Vec<String>,
+    encryption: String,
+    custom_password: Option<String>,
+) -> Result<ReceiveSession, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if name.chars().count() > 40 {
+        return Err("名称不能超过 40 个字符".to_string());
+    }
+    let extensions = normalize_receive_extensions(extensions)?;
+    let (mode, saved_password) = match encryption.as_str() {
+        "none" => (ReceiveEncryption::None, None),
+        "common" => {
+            if receive_common_password(&state).is_none() {
+                return Err("请先在设置中配置通用加密密码".to_string());
+            }
+            (ReceiveEncryption::Common, None)
+        }
+        "custom" => {
+            let password = custom_password.unwrap_or_default().trim().to_string();
+            let receivers = state.receivers.lock().unwrap();
+            let existing = receivers
+                .get(&id)
+                .ok_or_else(|| "接收卡片不存在".to_string())?;
+            let saved = if password.is_empty() {
+                existing.custom_password.clone()
+            } else {
+                Some(password)
+            };
+            if saved.is_none() {
+                return Err("单独加密必须设置密码".to_string());
+            }
+            (ReceiveEncryption::Custom, saved)
+        }
+        _ => return Err("加密方式无效".to_string()),
+    };
+
+    let mut receivers = state.receivers.lock().unwrap();
+    let receiver = receivers
+        .get_mut(&id)
+        .ok_or_else(|| "接收卡片不存在".to_string())?;
+    receiver.name = name;
+    receiver.extensions = extensions;
+    receiver.encryption = mode;
+    receiver.custom_password = saved_password;
+    let updated = receiver.clone();
+    drop(receivers);
+    persist_receivers(&state);
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn remove_receiver(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    id: String,
+) -> Result<(), String> {
+    let _ = tunnels.stop(format!("receive:{id}"));
+    state.receivers.lock().unwrap().remove(&id);
+    persist_receivers(&state);
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_receivers(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+) -> Result<(), String> {
+    let ids: Vec<String> = state.receivers.lock().unwrap().keys().cloned().collect();
+    for id in ids {
+        let _ = tunnels.stop(format!("receive:{id}"));
+    }
+    state.receivers.lock().unwrap().clear();
+    persist_receivers(&state);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_receive_common_password(state: State<'_, AppState>, password: String) -> Result<(), String> {
+    let mut cfg = read_config(&state);
+    let trimmed = password.trim();
+    cfg.receive_common_password = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    write_config(&state, &cfg);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_receive_dir(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
+    let target = PathBuf::from(path);
+    if target.exists() && !target.is_dir() {
+        return Err("必须是文件夹".to_string());
+    }
+    std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let resolved = std::fs::canonicalize(&target).unwrap_or(target.clone());
+    let mut cfg = read_config(&state);
+    cfg.receive_dir = Some(resolved.to_string_lossy().into_owned());
+    write_config(&state, &cfg);
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+async fn start_receiver_tunnel(
+    state: State<'_, AppState>,
+    tunnels: State<'_, TunnelManager>,
+    id: String,
+) -> Result<String, String> {
+    let receiver = state
+        .receivers
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "接收卡片不存在".to_string())?;
+    let port = *state.port.lock().unwrap();
+    let token = read_config(&state).ngrok_authtoken;
+    let root = tunnels.start(
+        format!("receive:{id}"),
+        format!("http://127.0.0.1:{port}"),
+        token,
+    )?;
+    Ok(format!("{root}/r/{}", receiver.id))
+}
+
+#[tauri::command]
+async fn stop_receiver_tunnel(tunnels: State<'_, TunnelManager>, id: String) -> Result<(), String> {
+    tunnels.stop(format!("receive:{id}"))
+}
+
+#[tauri::command]
+fn open_receive_dir(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let dir = receive_root_dir(&state).join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    reveal_in_explorer(&dir)
+}
+
+#[tauri::command]
 async fn set_share_port(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -499,8 +786,8 @@ async fn set_share_port(
     for id in ids {
         let _ = tunnels.stop(format!("share:{id}"));
     }
-    let status = start_server(app.clone(), port)
-        .map_err(|_| format!("端口 {port} 被占用，无法使用"))?;
+    let status =
+        start_server(app.clone(), port).map_err(|_| format!("端口 {port} 被占用，无法使用"))?;
     let old = handle.0.lock().unwrap().replace(status);
     if let Some(s) = old {
         let _ = stop_server(&s);
@@ -746,7 +1033,11 @@ fn check_one(raw: &str) -> PathCheck {
         None => (false, false, false, 0),
     };
     PathCheck {
-        basename: pb.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string(),
+        basename: pb
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string(),
         path: stripped,
         valid: exists,
         exists,
@@ -761,7 +1052,8 @@ fn strip_quotes(s: &str) -> String {
     if t.len() >= 2 {
         let bytes = t.as_bytes();
         if (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
-            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'') {
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+        {
             return t[1..t.len() - 1].trim().to_string();
         }
     }
@@ -769,26 +1061,48 @@ fn strip_quotes(s: &str) -> String {
 }
 
 #[tauri::command]
-fn resolve_share_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result<Vec<ShareSession>, String> {
+fn resolve_share_paths(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<Vec<ShareSession>, String> {
     let mut out = Vec::new();
     for raw in paths {
         let trimmed = raw.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let stripped = strip_quotes(trimmed);
         let path = PathBuf::from(&stripped);
-        let meta = match std::fs::metadata(&path) { Ok(m) => m, Err(_) => continue };
-        let kind = if meta.is_dir() { ShareKind::Folder } else { ShareKind::File };
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let kind = if meta.is_dir() {
+            ShareKind::Folder
+        } else {
+            ShareKind::File
+        };
         let (size, total_bytes) = share_path_stats(&path).unwrap_or((0, 0));
         let canonical = std::fs::canonicalize(&path).unwrap_or(path.clone());
         let existing = {
             let shares = state.shares.lock().unwrap();
-            shares.values().find(|s| {
-                let p = PathBuf::from(&s.path);
-                std::fs::canonicalize(&p).ok() == Some(canonical.clone())
-            }).cloned()
+            shares
+                .values()
+                .find(|s| {
+                    let p = PathBuf::from(&s.path);
+                    std::fs::canonicalize(&p).ok() == Some(canonical.clone())
+                })
+                .cloned()
         };
-        if let Some(s) = existing { out.push(s); continue; }
-        let name = canonical.file_name().and_then(|s| s.to_str()).unwrap_or("share").to_string();
+        if let Some(s) = existing {
+            out.push(s);
+            continue;
+        }
+        let name = canonical
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("share")
+            .to_string();
         let session = ShareSession {
             id: random_id(),
             name,
@@ -798,7 +1112,11 @@ fn resolve_share_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result
             total_bytes,
             created_at: storage::now_secs(),
         };
-        state.shares.lock().unwrap().insert(session.id.clone(), session.clone());
+        state
+            .shares
+            .lock()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
         out.push(session);
     }
     persist_shares(&state);
@@ -809,7 +1127,6 @@ fn resolve_share_paths(state: State<'_, AppState>, paths: Vec<String>) -> Result
 fn read_file_meta(path: String) -> Result<PathCheck, String> {
     Ok(check_one(&path))
 }
-
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -846,11 +1163,19 @@ pub fn run() {
             // Restore active shares so old links keep working after a restart.
             for mut session in load_shares(&state) {
                 session.path = strip_extended_prefix(&session.path);
-                state.shares.lock().unwrap().insert(session.id.clone(), session);
+                state
+                    .shares
+                    .lock()
+                    .unwrap()
+                    .insert(session.id.clone(), session);
             }
             for mut session in load_sites(&state) {
                 session.path = strip_extended_prefix(&session.path);
-                state.sites.lock().unwrap().insert(session.id.clone(), session);
+                state
+                    .sites
+                    .lock()
+                    .unwrap()
+                    .insert(session.id.clone(), session);
             }
             let restored_sites: Vec<SiteSession> = {
                 let sites = state.sites.lock().unwrap();
@@ -863,12 +1188,24 @@ pub fn run() {
                         .lock()
                         .unwrap()
                         .insert(session.id.clone(), status);
-                    state.sites.lock().unwrap().insert(session.id.clone(), session);
+                    state
+                        .sites
+                        .lock()
+                        .unwrap()
+                        .insert(session.id.clone(), session);
                 } else {
                     eprintln!("[site] failed to restore site server: {}", session.name);
                 }
             }
             persist_sites(&state);
+
+            for session in load_receivers(&state) {
+                state
+                    .receivers
+                    .lock()
+                    .unwrap()
+                    .insert(session.id.clone(), session);
+            }
 
             if let Ok(status) = try_bind(&app.handle(), share_base) {
                 let bound = status.port;
@@ -883,9 +1220,8 @@ pub fn run() {
             #[cfg(windows)]
             {
                 use webview2_com::Microsoft::Web::WebView2::Win32::{
-                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+                    ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
                     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-                    ICoreWebView2_19,
                 };
                 use windows_core::Interface;
 
@@ -898,12 +1234,10 @@ pub fn run() {
                             } else {
                                 COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
                             };
-                            let _ = event_window.with_webview(move |webview| {
-                                unsafe {
-                                    if let Ok(core) = webview.controller().CoreWebView2() {
-                                        if let Ok(core) = core.cast::<ICoreWebView2_19>() {
-                                            let _ = core.SetMemoryUsageTargetLevel(level);
-                                        }
+                            let _ = event_window.with_webview(move |webview| unsafe {
+                                if let Ok(core) = webview.controller().CoreWebView2() {
+                                    if let Ok(core) = core.cast::<ICoreWebView2_19>() {
+                                        let _ = core.SetMemoryUsageTargetLevel(level);
                                     }
                                 }
                             });
@@ -926,6 +1260,16 @@ pub fn run() {
             create_site,
             remove_site,
             clear_sites,
+            list_receivers,
+            create_receiver,
+            update_receiver,
+            remove_receiver,
+            clear_receivers,
+            set_receive_common_password,
+            set_receive_dir,
+            start_receiver_tunnel,
+            stop_receiver_tunnel,
+            open_receive_dir,
             set_share_port,
             set_site_port,
             set_ngrok_authtoken,

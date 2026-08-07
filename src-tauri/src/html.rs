@@ -3,7 +3,7 @@
 //! We hand-roll a couple of templates (no template engine) and escape
 //! every piece of dynamic content to prevent injection.
 
-use crate::state::{ShareKind, ShareSession};
+use crate::state::{ReceiveEncryption, ReceiveSession, ShareKind, ShareSession};
 
 const BRAND_SVG: &str = "<svg viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"18\" cy=\"5\" r=\"3\"/><circle cx=\"6\" cy=\"12\" r=\"3\"/><circle cx=\"18\" cy=\"19\" r=\"3\"/><path d=\"m8.6 13.5 6.8 4M15.4 6.5l-6.8 4\"/></svg>";
 
@@ -59,7 +59,7 @@ fn brand() -> String {
     )
 }
 
-pub fn render_index(shares: &[ShareSession]) -> String {
+pub fn render_index(shares: &[ShareSession], receivers: &[ReceiveSession]) -> String {
     let mut body = String::new();
     body.push_str(&brand());
 
@@ -67,35 +67,68 @@ pub fn render_index(shares: &[ShareSession]) -> String {
         body.push_str(
             "<p class=\"page-title\">暂无分享</p><p class=\"page-sub\">打开本机应用添加文件或文件夹后，这里会显示可下载的内容。</p>",
         );
+        body.push_str(&format!("<div class=\"empty\">{}</div>", EMPTY_SVG));
+    } else {
         body.push_str(&format!(
-            "<div class=\"empty\">{}</div>",
-            EMPTY_SVG
+            "<p class=\"page-title\">当前 {} 个分享</p><p class=\"page-sub\">以下内容由本机应用提供，仅限同一局域网内访问。</p>",
+            shares.len()
         ));
-        return page("暂无分享 - RV NetShare", &body);
+        body.push_str("<div class=\"cards\">");
+        for share in shares {
+            let (kind_label, icon_class, icon, href) = match share.kind {
+                ShareKind::File => ("文件", "icon-file", FILE_SVG, format!("/s/{}", share.id)),
+                ShareKind::Folder => (
+                    "文件夹",
+                    "icon-folder",
+                    FOLDER_SVG,
+                    format!("/s/{}/", share.id),
+                ),
+            };
+            let size = fmt_size(share.total_bytes.max(share.size));
+            body.push_str(&format!(
+                "<a class=\"card\" href=\"{href}\"><div class=\"card-top\"><div class=\"card-icon {icon_class}\">{icon}</div><div><div class=\"card-name\">{name}</div><div class=\"card-meta\"><span>{kind}</span><span>{size}</span></div></div></div><div class=\"card-open\">进入分享</div></a>",
+                href = href,
+                icon_class = icon_class,
+                icon = icon,
+                name = escape(&share.name),
+                kind = kind_label,
+                size = size,
+            ));
+        }
+        body.push_str("</div>");
     }
-
-    body.push_str(&format!(
-        "<p class=\"page-title\">当前 {} 个分享</p><p class=\"page-sub\">以下内容由本机应用提供，仅限同一局域网内访问。</p>",
-        shares.len()
-    ));
-    body.push_str("<div class=\"cards\">");
-    for share in shares {
-        let (kind_label, icon_class, icon, href) = match share.kind {
-            ShareKind::File => ("文件", "icon-file", FILE_SVG, format!("/s/{}", share.id)),
-            ShareKind::Folder => ("文件夹", "icon-folder", FOLDER_SVG, format!("/s/{}/", share.id)),
-        };
-        let size = fmt_size(share.total_bytes.max(share.size));
+    if !receivers.is_empty() {
         body.push_str(&format!(
-            "<a class=\"card\" href=\"{href}\"><div class=\"card-top\"><div class=\"card-icon {icon_class}\">{icon}</div><div><div class=\"card-name\">{name}</div><div class=\"card-meta\"><span>{kind}</span><span>{size}</span></div></div></div><div class=\"card-open\">进入分享</div></a>",
-            href = href,
-            icon_class = icon_class,
-            icon = icon,
-            name = escape(&share.name),
-            kind = kind_label,
-            size = size,
+            "<p class=\"page-title receive-title\">接收</p><p class=\"page-sub\">打开下方卡片对应的页面即可上传文件。</p>"
         ));
+        body.push_str("<div class=\"cards\">");
+        for receiver in receivers {
+            let encryption_label = match receiver.encryption {
+                ReceiveEncryption::None => "不加密",
+                ReceiveEncryption::Common => "通用加密",
+                ReceiveEncryption::Custom => "单独加密",
+            };
+            let allowed = if receiver.extensions.iter().any(|ext| ext == "*") {
+                "全部文件".to_string()
+            } else {
+                receiver
+                    .extensions
+                    .iter()
+                    .map(|ext| format!(".{ext}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            body.push_str(&format!(
+                "<a class=\"card\" href=\"/r/{id}\"><div class=\"card-top\"><div class=\"card-icon icon-file\">{icon}</div><div><div class=\"card-name\">{name}</div><div class=\"card-meta\"><span>{encryption}</span><span>{allowed}</span></div></div></div><div class=\"card-open\">进入接收</div></a>",
+                id = receiver.id,
+                icon = EMPTY_SVG,
+                name = escape(&receiver.name),
+                encryption = encryption_label,
+                allowed = allowed,
+            ));
+        }
+        body.push_str("</div>");
     }
-    body.push_str("</div>");
     page(&format!("{} 个分享 - RV NetShare", shares.len()), &body)
 }
 
@@ -184,6 +217,146 @@ pub fn render_error(code: u16, reason: &str, msg: &str) -> String {
     page(&format!("{code} {reason}"), &body)
 }
 
+pub fn render_receive_page(receiver: &ReceiveSession, password_required: bool) -> String {
+    let encryption_label = match receiver.encryption {
+        ReceiveEncryption::None => "不加密",
+        ReceiveEncryption::Common => "通用加密",
+        ReceiveEncryption::Custom => "单独加密",
+    };
+    let (allowed, accept) = if receiver.extensions.iter().any(|ext| ext == "*") {
+        ("全部文件".to_string(), String::new())
+    } else {
+        let listed = receiver
+            .extensions
+            .iter()
+            .map(|ext| format!(".{ext}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let accept = receiver
+            .extensions
+            .iter()
+            .map(|ext| format!(".{ext}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        (listed, accept)
+    };
+    let password_block = if password_required {
+        r#"<label class="password-label" for="upload-password">上传密码<input id="upload-password" type="password" autocomplete="off" placeholder="请输入上传密码" required /></label>"#.to_string()
+    } else {
+        String::new()
+    };
+    let body = format!(
+        r#"<div class="brand"><div class="brand-icon">{brand}</div><div><h1>RV NetShare</h1><p>文件接收</p></div></div>
+<div class="receive-head">
+  <div>
+    <p class="page-title">接收文件</p>
+    <p class="page-sub">上传到「{name}」</p>
+  </div>
+  <span class="badge">{encryption}</span>
+</div>
+<div class="receive-panel">
+  <div class="receive-meta">
+    <span>允许类型：{allowed}</span>
+    <span>已接收 {count} 个</span>
+  </div>
+  <div id="drop" class="dropzone" role="button" tabindex="0">
+    <div class="drop-icon">{drop_icon}</div>
+    <p>拖拽文件到这里，或点击选择</p>
+    <input id="file-input" type="file" multiple accept="{accept}" hidden />
+  </div>
+  <form id="upload-form" class="receive-form">
+    {password_block}
+    <button type="submit">开始上传</button>
+  </form>
+  <ul id="selected-list" class="selected-list"></ul>
+  <ul id="status"></ul>
+</div>
+<script>
+const input = document.getElementById('file-input');
+const drop = document.getElementById('drop');
+const form = document.getElementById('upload-form');
+const selectedList = document.getElementById('selected-list');
+const statusList = document.getElementById('status');
+const passwordInput = document.getElementById('upload-password');
+const uploadUrl = '/r/{id}/upload';
+let selectedFiles = [];
+function formatSize(bytes) {{
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(1) + ' GB';
+}}
+function renderSelected() {{
+  selectedList.innerHTML = '';
+  if (!selectedFiles.length) return;
+  const head = document.createElement('li');
+  head.className = 'selected-head';
+  head.textContent = '已选择 ' + selectedFiles.length + ' 个文件';
+  selectedList.appendChild(head);
+  selectedFiles.forEach((file) => {{
+    const li = document.createElement('li');
+    li.textContent = file.name + ' (' + formatSize(file.size) + ')';
+    selectedList.appendChild(li);
+  }});
+}}
+function updateSelection(fileList) {{
+  selectedFiles = Array.from(fileList);
+  renderSelected();
+  statusList.innerHTML = '';
+}}
+drop.addEventListener('click', () => input.click());
+drop.addEventListener('keydown', (e) => {{ if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); input.click(); }} }});
+drop.addEventListener('dragover', (e) => {{ e.preventDefault(); drop.classList.add('dragging'); }});
+drop.addEventListener('dragleave', () => drop.classList.remove('dragging'));
+drop.addEventListener('drop', (e) => {{ e.preventDefault(); drop.classList.remove('dragging'); updateSelection(e.dataTransfer.files); }});
+input.addEventListener('change', () => updateSelection(input.files));
+form.addEventListener('submit', async (e) => {{
+  e.preventDefault();
+  const files = selectedFiles;
+  if (!files.length) return;
+  const password = passwordInput ? passwordInput.value : '';
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  for (const file of files) {{
+    const li = document.createElement('li');
+    li.textContent = '上传中 ' + file.name;
+    statusList.appendChild(li);
+    try {{
+      const response = await fetch(uploadUrl, {{
+        method: 'POST',
+        body: file,
+        headers: {{
+          'X-File-Name': encodeURIComponent(file.name),
+          'X-Upload-Password': password
+        }}
+      }});
+      const data = await response.json();
+      li.textContent = (data.ok ? '成功：' : '失败：') + file.name + (data.message ? ' - ' + data.message : '');
+      li.className = data.ok ? 'ok' : 'error';
+    }} catch (err) {{
+      li.textContent = '失败：' + file.name;
+      li.className = 'error';
+    }}
+  }}
+  button.disabled = false;
+  input.value = '';
+  selectedFiles = [];
+  renderSelected();
+}});
+</script>"#,
+        brand = BRAND_SVG,
+        name = escape(&receiver.name),
+        encryption = encryption_label,
+        allowed = allowed,
+        count = receiver.received_count,
+        drop_icon = EMPTY_SVG,
+        accept = accept,
+        password_block = password_block,
+        id = receiver.id,
+    );
+    page(&format!("接收文件 - {}", receiver.name), &body)
+}
+
 fn parent_link(share: &ShareSession, subpath: &str) -> String {
     let p = subpath.trim_end_matches('/');
     let parent = match p.rfind('/') {
@@ -218,6 +391,7 @@ const CSS: &str = "
   .brand h1 { margin:0; font-size:20px; letter-spacing:0; }
   .brand p { margin:2px 0 0; font-size:12px; color:var(--muted); }
   .page-title { margin:0 0 6px; font-size:26px; letter-spacing:0; }
+  .receive-title { margin-top:30px; }
   .page-sub { margin:0 0 24px; color:var(--muted); font-size:13.5px; }
   .badge { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:12.5px; font-weight:600; }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
@@ -253,5 +427,26 @@ const CSS: &str = "
   .error .brand-icon { margin:0 auto 16px; }
   .error h1 { margin:0 0 6px; font-size:18px; letter-spacing:0; }
   .error p { margin:0; color:var(--muted); font-size:13.5px; }
-  @media (max-width:640px) { .wrap { padding:24px 14px 48px; } .cards { grid-template-columns:1fr; } }
+  .receive-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+  .receive-panel { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:18px; box-shadow:var(--shadow); }
+  .receive-meta { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; color:var(--muted); font-size:12.5px; }
+  .receive-meta span { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:4px 10px; }
+  .dropzone { border:2px dashed var(--border-strong); border-radius:14px; padding:34px 16px; text-align:center; cursor:pointer; transition:border-color .15s ease,background-color .15s ease; }
+  .dropzone:hover, .dropzone.dragging { border-color:var(--accent); background:var(--accent-soft); }
+  .dropzone p { margin:0; color:var(--muted); font-size:13px; }
+  .drop-icon { display:flex; align-items:center; justify-content:center; color:var(--subtle); margin-bottom:10px; }
+  .receive-form { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+  .password-label { width:100%; display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+  .password-label input { width:100%; height:42px; border:1px solid var(--border); border-radius:9px; background:var(--surface-2); color:var(--text); padding:0 12px; font-size:13px; outline:none; }
+  .password-label input:focus { border-color:var(--accent); }
+  .receive-form button { height:42px; min-width:150px; align-self:flex-end; border:0; border-radius:9px; background:var(--accent); color:var(--accent-fg); padding:0 22px; font-size:13px; font-weight:600; cursor:pointer; }
+  .receive-form button:disabled { opacity:.55; cursor:default; }
+  #status { list-style:none; margin:14px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; font-size:12.5px; }
+  #status li { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 12px; word-break:break-all; }
+  #status li.ok { color:#16a34a; border-color:#16a34a55; }
+  #status li.error { color:#dc2626; border-color:#dc262655; }
+  .selected-list { list-style:none; margin:10px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+  .selected-list .selected-head { color:var(--text); font-weight:600; padding:0 2px; background:transparent; border:0; }
+  .selected-list li { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 12px; word-break:break-all; }
+  @media (max-width:640px) { .wrap { padding:24px 14px 48px; } .cards { grid-template-columns:1fr; } .receive-form button { width:100%; align-self:stretch; } }
 ";

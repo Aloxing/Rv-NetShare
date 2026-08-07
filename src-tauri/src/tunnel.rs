@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use ngrok::config::ForwarderBuilder;
 use ngrok::forwarder::Forwarder;
-use ngrok::Error as NgrokError;
 use ngrok::prelude::{EndpointInfo, TunnelCloser};
 use ngrok::tunnel::HttpTunnel;
+use ngrok::Error as NgrokError;
 use ngrok::Session;
 use tokio::runtime::Runtime;
 use url::Url;
@@ -100,7 +100,9 @@ impl TunnelManager {
 impl Drop for TunnelManager {
     fn drop(&mut self) {
         let (reply_tx, reply_rx) = channel();
-        let _ = self.sender.send(TunnelCommand::Shutdown { reply: reply_tx });
+        let _ = self
+            .sender
+            .send(TunnelCommand::Shutdown { reply: reply_tx });
         let _ = reply_rx.recv_timeout(Duration::from_secs(10));
         self.worker.take();
     }

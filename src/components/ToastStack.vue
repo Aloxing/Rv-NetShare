@@ -23,7 +23,7 @@ function classFor(kind: string) {
         <CheckCircle2 v-if="t.kind === 'success'" :size="15" class="shrink-0 text-[var(--color-success)]" />
         <AlertCircle v-else-if="t.kind === 'error'" :size="15" class="shrink-0 text-[var(--color-danger)]" />
         <Info v-else :size="15" class="shrink-0 text-[var(--color-icon-accent)]" />
-        <span class="flex-1">{{ t.text }}</span>
+        <span class="min-w-0 flex-1 break-all line-clamp-3">{{ t.text }}</span>
       </div>
     </transition-group>
   </div>

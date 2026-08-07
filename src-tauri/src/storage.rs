@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::state::{ShareSession, SiteSession};
+use crate::state::{ReceiveSession, ShareSession, SiteSession};
 
 /// Serializes read-modify-write cycles so concurrent downloads cannot
 /// corrupt history.json.
@@ -34,6 +34,12 @@ pub struct AccessRecord {
     pub peer: String,
     pub user_agent: Option<String>,
     pub status: String,
+    #[serde(default = "default_access_kind")]
+    pub kind: String,
+}
+
+fn default_access_kind() -> String {
+    "share".to_string()
 }
 
 pub fn ensure_data_dir(state: &crate::state::AppState) -> io::Result<PathBuf> {
@@ -112,6 +118,25 @@ pub fn read_sites(dir: &Path) -> io::Result<Vec<SiteSession>> {
 pub fn write_sites(dir: &Path, sites: &[SiteSession]) -> io::Result<()> {
     let path = dir.join("sites.json");
     let raw = serde_json::to_string_pretty(sites)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(path, raw)
+}
+
+pub fn read_receivers(dir: &Path) -> io::Result<Vec<ReceiveSession>> {
+    let path = dir.join("receivers.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&path)?;
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+pub fn write_receivers(dir: &Path, receivers: &[ReceiveSession]) -> io::Result<()> {
+    let path = dir.join("receivers.json");
+    let raw = serde_json::to_string_pretty(receivers)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(path, raw)
 }

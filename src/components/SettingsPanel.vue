@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Copy, ExternalLink, FolderCog, Globe, HardDrive, Info, Laptop, Minus, Plus, RadioTower, RefreshCw, Settings, Type, Waypoints } from '@lucide/vue';
+import { Copy, ExternalLink, FolderCog, Globe, HardDrive, Inbox, Info, Laptop, Minus, Plus, RadioTower, RefreshCw, Settings, Type, Waypoints } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   pushToast,
@@ -10,16 +10,19 @@ import {
   setSaveDir,
   setSharePort,
   setSitePort,
+  setReceiveCommonPassword,
+  setReceiveDir,
   setThemeMode,
   useAppState,
 } from '../composables/useAppState';
 
-type SectionKey = 'identity' | 'storage' | 'ports' | 'tunnel' | 'appearance' | 'about';
+type SectionKey = 'identity' | 'storage' | 'ports' | 'receive' | 'tunnel' | 'appearance' | 'about';
 
 const sectionItems = [
   { key: 'identity', label: '身份', icon: Laptop },
   { key: 'storage', label: '存储', icon: HardDrive },
   { key: 'ports', label: '端口', icon: RadioTower },
+  { key: 'receive', label: '接收', icon: Inbox },
   { key: 'tunnel', label: '穿透', icon: Waypoints },
   { key: 'appearance', label: '界面', icon: Type },
   { key: 'about', label: '关于', icon: Info },
@@ -42,6 +45,10 @@ const submittingSharePort = ref(false);
 const submittingSitePort = ref(false);
 const authtokenInput = ref<string>(state.initial?.ngrok_authtoken ?? '');
 const applyingToken = ref(false);
+const receivePasswordInput = ref<string>(state.initial?.receive_common_password ?? '');
+const savingReceivePassword = ref(false);
+const receiveDirInput = ref<string>(state.initial?.receive_dir ?? '');
+const submittingReceiveDir = ref(false);
 
 const hostname = computed(() => state.initial?.hostname ?? '-');
 const localIp = computed(() => state.initial?.local_ip ?? '-');
@@ -57,6 +64,8 @@ watch(() => state.initial, (initial) => {
     sharePortInput.value = String(initial.share_port ?? 48721);
     sitePortInput.value = String(initial.site_port ?? 48800);
     authtokenInput.value = initial.ngrok_authtoken ?? '';
+    receivePasswordInput.value = initial.receive_common_password ?? '';
+    receiveDirInput.value = initial.receive_dir ?? '';
   }
 }, { immediate: true });
 
@@ -152,6 +161,43 @@ async function saveNgrokToken() {
     pushToast('error', String(err));
   } finally {
     applyingToken.value = false;
+  }
+}
+
+async function saveReceivePassword() {
+  if (savingReceivePassword.value) return;
+  savingReceivePassword.value = true;
+  try {
+    await setReceiveCommonPassword(receivePasswordInput.value);
+    pushToast('success', '接收通用密码已保存');
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    savingReceivePassword.value = false;
+  }
+}
+
+async function applyReceiveDir() {
+  const value = receiveDirInput.value.trim();
+  if (!value) return;
+  submittingReceiveDir.value = true;
+  try {
+    const resolved = await setReceiveDir(value);
+    receiveDirInput.value = resolved;
+    pushToast('success', '接收目录已更新');
+  } catch (err) {
+    pushToast('error', String(err));
+  } finally {
+    submittingReceiveDir.value = false;
+  }
+}
+
+async function pickReceiveDir() {
+  try {
+    const selected = await open({ directory: true });
+    if (selected) receiveDirInput.value = selected;
+  } catch (err) {
+    pushToast('error', String(err));
   }
 }
 
@@ -343,6 +389,64 @@ async function onRefreshIp() {
                   </button>
                 </form>
               </div>
+            </div>
+          </section>
+
+          <!-- 接收 -->
+          <section v-show="activeSection === 'receive'" class="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+            <div class="mb-3 flex h-7 items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-icon-accent-soft)] text-[var(--color-icon-accent)]">
+                  <Inbox :size="14" />
+                </div>
+                <span class="text-[12.5px] font-semibold">接收设置</span>
+              </div>
+              <span
+                class="text-[11px] font-medium leading-none"
+                :class="state.initial?.receive_common_password ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-subtle)]'"
+              >
+                {{ state.initial?.receive_common_password ? '通用密码已配置' : '通用密码未配置' }}
+              </span>
+            </div>
+            <div class="mb-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)] p-3">
+              <div class="mb-2 flex items-center gap-2">
+                <FolderCog :size="13" class="text-[var(--color-text-subtle)]" />
+                <span class="text-[11.5px] font-medium text-[var(--color-text-muted)]">接收保存目录</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-[var(--color-bg-hover)] px-3 py-2">
+                <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--color-text-muted)]" :title="receiveDirInput">{{ receiveDirInput }}</span>
+              </div>
+              <form class="mt-2.5 flex gap-2" @submit.prevent="applyReceiveDir">
+                <input
+                  v-model="receiveDirInput"
+                  type="text"
+                  placeholder="D:\received-files"
+                  class="rv-input h-9 min-w-0 flex-1 font-mono text-[11.5px]"
+                  :disabled="submittingReceiveDir"
+                />
+                <button type="button" class="inline-flex h-9 shrink-0 items-center rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-[11.5px] text-[var(--color-text)] transition hover:bg-[var(--color-bg-hover)]" @click="pickReceiveDir">浏览</button>
+                <button type="submit" class="inline-flex h-9 shrink-0 items-center rounded-lg bg-transparent px-3.5 text-[11.5px] font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent-hover)] disabled:opacity-50" :disabled="submittingReceiveDir || !receiveDirInput.trim()">应用</button>
+              </form>
+            </div>
+            <div class="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-panel)] p-3">
+              <div class="mb-2 text-[11.5px] font-medium text-[var(--color-text-muted)]">通用加密密码</div>
+              <form class="flex gap-2" @submit.prevent="saveReceivePassword">
+                <input
+                  v-model="receivePasswordInput"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="设置接收卡片的通用上传密码"
+                  class="rv-input h-9 min-w-0 flex-1 font-mono text-[11.5px]"
+                  :disabled="savingReceivePassword"
+                />
+                <button
+                  type="submit"
+                  class="inline-flex h-9 shrink-0 items-center rounded-lg bg-transparent px-3 text-[11.5px] font-medium text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent-hover)] disabled:opacity-50"
+                  :disabled="savingReceivePassword"
+                >
+                  保存
+                </button>
+              </form>
             </div>
           </section>
 

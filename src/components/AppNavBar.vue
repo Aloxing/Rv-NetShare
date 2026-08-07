@@ -13,6 +13,7 @@ interface Item { key: Tab; label: string; count?: () => number; }
 const items: Item[] = [
   { key: 'shares', label: '分享', count: () => state.shares.length },
   { key: 'sites', label: '站点', count: () => state.sites.length },
+  { key: 'receive', label: '接收', count: () => state.receivers.length },
   { key: 'history', label: '记录', count: () => state.history.length },
   { key: 'settings', label: '设置' },
 ];
@@ -83,7 +84,7 @@ onBeforeUnmount(() => {
         v-for="(item, index) in items"
         :key="item.key"
         :ref="(el) => setItemRef(el, index)"
-        class="group relative z-10 flex h-8 w-24 items-center justify-center gap-2 rounded-full text-[13px] transition-all duration-150 active:scale-[0.97]"
+        class="group relative z-10 flex h-8 w-20 items-center justify-center gap-2 rounded-full text-[13px] transition-all duration-150 active:scale-[0.97]"
         :class="props.active === item.key
           ? 'font-medium text-[var(--color-accent-fg)]'
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-accent)]'"

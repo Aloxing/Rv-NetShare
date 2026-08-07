@@ -6,6 +6,7 @@ import AppTitleBar from './components/AppTitleBar.vue';
 import AppStatusBar from './components/AppStatusBar.vue';
 import SharesPanel from './components/SharesPanel.vue';
 import SitesPanel from './components/SitesPanel.vue';
+import ReceivePanel from './components/ReceivePanel.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
 import SettingsPanel from './components/SettingsPanel.vue';
 import ToastStack from './components/ToastStack.vue';
@@ -48,6 +49,7 @@ onBeforeUnmount(() => {
 
 const shareCount = computed(() => state.shares.length);
 const siteCount = computed(() => state.sites.length);
+const receiveCount = computed(() => state.receivers.length);
 const historyCount = computed(() => state.history.length);
 </script>
 
@@ -60,6 +62,7 @@ const historyCount = computed(() => state.history.length);
       <div class="flex-1 overflow-hidden">
         <SharesPanel v-if="activeTab === 'shares'" />
         <SitesPanel v-else-if="activeTab === 'sites'" />
+        <ReceivePanel v-else-if="activeTab === 'receive'" />
         <HistoryPanel v-else-if="activeTab === 'history'" />
         <SettingsPanel v-else-if="activeTab === 'settings'" />
       </div>
@@ -77,7 +80,7 @@ const historyCount = computed(() => state.history.length);
       </div>
     </div>
 
-    <AppStatusBar :shares="shareCount" :sites="siteCount" :history="historyCount" />
+    <AppStatusBar :shares="shareCount" :sites="siteCount" :receives="receiveCount" :history="historyCount" />
     <ToastStack />
   </div>
 </template>
